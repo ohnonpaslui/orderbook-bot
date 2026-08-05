@@ -1,0 +1,52 @@
+name: Collecte carnet
+
+# PHASE 1 — actif par defaut.
+# Enregistre le carnet BTC/USD en continu dans data/. A laisser tourner
+# 1 a 2 semaines avant de calibrer la strategie (voir README).
+# Une fois le bot live active, DESACTIVER ce workflow (onglet Actions >
+# Collecte carnet > ... > Disable workflow) : les deux ecrivent dans data/.
+
+on:
+  schedule:
+    - cron: "0 */5 * * *"       # nouvelle session toutes les 5 heures
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: orderbook-data         # jamais deux ecrivains sur data/ en parallele
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330        # coupe-circuit sous la limite GitHub de 6 h
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Git config
+        run: |
+          git config user.name  "orderbook-collector"
+          git config user.email "actions@github.com"
+
+      - name: Collecte (~5 h)
+        env:
+          GIT_PUSH: "1"
+          MAX_RUNTIME: "17700"  # 4 h 55 : la session suivante prend le relais
+        run: python collector.py
+
+      - name: Commit de securite
+        if: always()
+        run: |
+          git add data 2>/dev/null || true
+          git diff --cached --quiet || git commit -m "Sauvegarde fin de session"
+          git pull --rebase || true
+          git push || true

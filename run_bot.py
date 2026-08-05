@@ -1,0 +1,130 @@
+"""
+run_bot.py — Phase 3 : bot en paper trading temps réel.
+
+Fait exactement ce que fait le collecteur (snapshot + écriture dans data/) et,
+en plus, alimente la stratégie et le moteur de paper trading. C'est voulu :
+un seul processus, un seul appel API par tick, et la collecte ne s'arrête
+jamais — on continue d'accumuler des données pour recalibrer plus tard.
+
+=> Quand ce workflow est actif, DÉSACTIVER le workflow « Collecte carnet »,
+   sinon deux processus écrivent dans data/ et se marchent dessus sur git.
+
+Lancement :
+  local          : python run_bot.py
+  GitHub Actions : GIT_PUSH=1 MAX_RUNTIME=17700 python run_bot.py
+"""
+
+import os
+import subprocess
+import time
+from datetime import datetime, timezone
+
+import ccxt
+
+import collector
+import config as C
+import features
+import paper_engine
+from strategy import ObiWallsStrategy
+
+MAX_RUNTIME = int(os.environ.get("MAX_RUNTIME", "0"))
+GIT_PUSH    = os.environ.get("GIT_PUSH") == "1"
+
+
+def git_commit(message):
+    try:
+        paths = [p for p in (C.DATA_DIR, C.STATE_DIR, C.TRADES_DIR) if os.path.isdir(p)]
+        if not paths:
+            return
+        subprocess.run(["git", "add", *paths], check=True)
+        if subprocess.run(["git", "diff", "--cached", "--quiet"]).returncode == 0:
+            return
+        subprocess.run(["git", "commit", "-m", message], check=True)
+        subprocess.run(["git", "pull", "--rebase"], check=False)
+        subprocess.run(["git", "push"], check=True)
+    except Exception as e:
+        print(f"[git] echec commit/push : {e}", flush=True)
+
+
+def main():
+    start = time.time()
+    ex    = getattr(ccxt, C.EXCHANGE)({"enableRateLimit": True})
+    strat = ObiWallsStrategy()
+    state = paper_engine.load_state(C.BOT_ID)
+
+    buffer, n_ok, n_err = [], 0, 0
+    last_commit  = time.time()
+    pending_push = False
+
+    pos = state.get("position")
+    print(f"Bot {C.BOT_ID} demarre — {C.SYMBOL} — capital {state['capital']:.2f}$ — "
+          f"position {'ouverte ' + pos['side'] if pos else 'aucune'}", flush=True)
+
+    while True:
+        cycle_start = time.time()
+        if MAX_RUNTIME and cycle_start - start > MAX_RUNTIME:
+            print("Duree max atteinte, arret propre.", flush=True)
+            break
+
+        try:
+            book = ex.fetch_order_book(C.SYMBOL, limit=C.BOOK_DEPTH)
+            row  = features.compute(book, cycle_start)
+        except Exception as e:
+            n_err += 1
+            if n_err % 10 == 1:
+                print(f"[data] {type(e).__name__}: {e}", flush=True)
+            time.sleep(5)
+            continue
+
+        if row is None:
+            n_err += 1
+            time.sleep(C.SNAPSHOT_INTERVAL)
+            continue
+
+        buffer.append(row)
+        n_ok += 1
+
+        # L'EMA de l'OBI doit voir chaque snapshot, y compris pendant une
+        # position ouverte — sinon elle repart de zéro à chaque sortie.
+        signal = strat.update(row)
+        if state.get("position"):
+            signal = None
+
+        state, changed, events = paper_engine.step(C.BOT_ID, state, row, signal, strat)
+        if changed:
+            paper_engine.save_state(C.BOT_ID, state)
+            pending_push = True
+            now = datetime.now(timezone.utc).strftime("%H:%M:%S")
+            for e in events:
+                print(f"{now} UTC  {e}", flush=True)
+
+        if len(buffer) >= C.FLUSH_EVERY:
+            collector.flush(buffer)
+
+        # Un événement de trading est poussé tout de suite (le dashboard le
+        # voit dans la minute) ; sinon on s'en tient à la cadence de commit.
+        due = time.time() - last_commit >= C.COMMIT_EVERY
+        if GIT_PUSH and (pending_push or due):
+            collector.flush(buffer)
+            now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+            msg = (" | ".join(events) if events
+                   else f"Collecte {C.SYMBOL} — {now} UTC ({n_ok} snapshots)")
+            git_commit(msg)
+            last_commit, pending_push = time.time(), False
+            if not events:
+                print(f"{now} UTC  {n_ok} snapshots, {n_err} erreurs — "
+                      f"capital {state['capital']:.2f}$ — "
+                      f"dernier filtre : {strat.last_reject}", flush=True)
+
+        time.sleep(max(0.0, C.SNAPSHOT_INTERVAL - (time.time() - cycle_start)))
+
+    collector.flush(buffer)
+    paper_engine.save_state(C.BOT_ID, state)
+    if GIT_PUSH:
+        git_commit(f"Fin de session — capital {state['capital']:.2f}$")
+    print(f"Termine : {n_ok} snapshots, {n_err} erreurs, "
+          f"capital {state['capital']:.2f}$", flush=True)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,53 @@
+name: Bot carnet - paper trading
+
+# PHASE 3 — volontairement SANS cron au depart.
+# Tant que la strategie n'est pas calibree sur les donnees collectees, ce
+# workflow ne se lance qu'a la main (Actions > Run workflow).
+#
+# Pour le passer en continu : decommenter le bloc `schedule` ci-dessous ET
+# desactiver le workflow « Collecte carnet » — run_bot.py collecte aussi.
+
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: "0 */5 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: orderbook-data         # meme groupe que le collecteur : jamais les deux
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Git config
+        run: |
+          git config user.name  "orderbook-bot"
+          git config user.email "actions@github.com"
+
+      - name: Bot paper trading (~5 h)
+        env:
+          GIT_PUSH: "1"
+          MAX_RUNTIME: "17700"
+        run: python run_bot.py
+
+      - name: Commit de securite
+        if: always()
+        run: |
+          git add data state trades 2>/dev/null || true
+          git diff --cached --quiet || git commit -m "Sauvegarde fin de session"
+          git pull --rebase || true
+          git push || true
