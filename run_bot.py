@@ -15,7 +15,6 @@ Lancement :
 """
 
 import os
-import subprocess
 import time
 from datetime import datetime, timezone
 
@@ -32,23 +31,13 @@ GIT_PUSH    = os.environ.get("GIT_PUSH") == "1"
 
 
 def git_commit(message):
-    try:
-        paths = [p for p in (C.DATA_DIR, C.STATE_DIR, C.TRADES_DIR) if os.path.isdir(p)]
-        if not paths:
-            return
-        subprocess.run(["git", "add", *paths], check=True)
-        if subprocess.run(["git", "diff", "--cached", "--quiet"]).returncode == 0:
-            return
-        subprocess.run(["git", "commit", "-m", message], check=True)
-        subprocess.run(["git", "pull", "--rebase"], check=False)
-        subprocess.run(["git", "push"], check=True)
-    except Exception as e:
-        print(f"[git] echec commit/push : {e}", flush=True)
+    collector.git_commit(message, paths=(C.DATA_DIR, C.STATE_DIR, C.TRADES_DIR))
 
 
 def main():
     start = time.time()
-    ex    = getattr(ccxt, C.EXCHANGE)({"enableRateLimit": True})
+    C.use_venue(C.LIVE_VENUE)       # fixe frais, symbole, fenêtre de murs
+    ex    = getattr(ccxt, C.EXCHANGE)({"enableRateLimit": True, "timeout": 25000})
     strat = ObiWallsStrategy()
     state = paper_engine.load_state(C.BOT_ID)
 
@@ -57,8 +46,11 @@ def main():
     pending_push = False
 
     pos = state.get("position")
-    print(f"Bot {C.BOT_ID} demarre — {C.SYMBOL} — capital {state['capital']:.2f}$ — "
-          f"position {'ouverte ' + pos['side'] if pos else 'aucune'}", flush=True)
+    print(f"Bot {C.BOT_ID} demarre — {C.VENUE} {C.SYMBOL} — "
+          f"capital {state['capital']:.2f}$ — "
+          f"position {'ouverte ' + pos['side'] if pos else 'aucune'} — "
+          f"frais {C.FEE_ROUNDTRIP_BPS:.0f} bps AR, murs "
+          f"[{C.WALL_MIN_DIST_BPS:.0f}, {C.WALL_MAX_DIST_BPS:.0f}] bps", flush=True)
 
     while True:
         cycle_start = time.time()
@@ -99,13 +91,13 @@ def main():
                 print(f"{now} UTC  {e}", flush=True)
 
         if len(buffer) >= C.FLUSH_EVERY:
-            collector.flush(buffer)
+            collector.flush(C.VENUE, buffer)
 
         # Un événement de trading est poussé tout de suite (le dashboard le
         # voit dans la minute) ; sinon on s'en tient à la cadence de commit.
         due = time.time() - last_commit >= C.COMMIT_EVERY
         if GIT_PUSH and (pending_push or due):
-            collector.flush(buffer)
+            collector.flush(C.VENUE, buffer)
             now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
             msg = (" | ".join(events) if events
                    else f"Collecte {C.SYMBOL} — {now} UTC ({n_ok} snapshots)")
@@ -118,7 +110,7 @@ def main():
 
         time.sleep(max(0.0, C.SNAPSHOT_INTERVAL - (time.time() - cycle_start)))
 
-    collector.flush(buffer)
+    collector.flush(C.VENUE, buffer)
     paper_engine.save_state(C.BOT_ID, state)
     if GIT_PUSH:
         git_commit(f"Fin de session — capital {state['capital']:.2f}$")

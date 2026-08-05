@@ -28,9 +28,9 @@ def _depth_notional(levels, mid, band_bps, side):
     return total
 
 
-def _find_wall(levels, mid, side):
+def _find_wall(levels, mid, side, band_bps):
     """
-    Cherche le plus gros ordre passif anormal dans la bande WALL_BAND_BPS.
+    Cherche le plus gros ordre passif anormal dans la bande `band_bps`.
 
     "Anormal" = son notionnel dépasse WALL_MIN_MULT fois la médiane des niveaux
     de la bande, et un plancher absolu en $. La médiane (et non la moyenne)
@@ -38,8 +38,8 @@ def _find_wall(levels, mid, side):
 
     Retourne (prix, notionnel, distance_bps) ou (0.0, 0.0, 0.0) si aucun mur.
     """
-    limit = (mid * (1 - C.WALL_BAND_BPS / 10_000) if side == "bid"
-             else mid * (1 + C.WALL_BAND_BPS / 10_000))
+    limit = (mid * (1 - band_bps / 10_000) if side == "bid"
+             else mid * (1 + band_bps / 10_000))
 
     band = []
     for lvl in levels:
@@ -63,14 +63,20 @@ def _find_wall(levels, mid, side):
     return price, notional, dist_bps
 
 
-def compute(book, ts):
+def compute(book, ts, wall_band_bps=None):
     """
-    book : dict ccxt {"bids": [[px, amt], ...], "asks": [[px, amt], ...]}
-           bids triés décroissant, asks triés croissant.
-    ts   : timestamp epoch en secondes (float).
+    book          : dict ccxt {"bids": [[px, amt], ...], "asks": [...]}
+                    bids triés décroissant, asks triés croissant.
+    ts            : timestamp epoch en secondes (float).
+    wall_band_bps : étendue de recherche des murs. Passé explicitement par le
+                    collecteur, qui interroge plusieurs plateformes en
+                    parallèle : lire C.WALL_BAND_BPS ici rendrait la fonction
+                    dépendante d'un global que les threads s'écraseraient.
 
     Retourne un dict plat, ou None si le carnet est inexploitable.
     """
+    if wall_band_bps is None:
+        wall_band_bps = C.WALL_BAND_BPS
     bids, asks = book.get("bids") or [], book.get("asks") or []
     if len(bids) < 5 or len(asks) < 5:
         return None
@@ -105,7 +111,7 @@ def compute(book, ts):
         row[f"obi_{band}"] = round((b - a) / (b + a), 4) if (b + a) > 0 else 0.0
 
     for side, levels in (("bid", bids), ("ask", asks)):
-        px, notional, dist = _find_wall(levels, mid, side)
+        px, notional, dist = _find_wall(levels, mid, side, wall_band_bps)
         row[f"{side}_wall_px"]  = round(px, 2)
         row[f"{side}_wall_sz"]  = round(notional, 1)
         row[f"{side}_wall_bps"] = round(dist, 3)

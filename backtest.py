@@ -28,10 +28,10 @@ FLOAT_COLS = None       # rempli au premier chargement
 
 
 # ----------------------------- Chargement -------------------------------------
-def load_rows(date_from=None, date_to=None):
-    """Charge tous les snapshots de data/, triés chronologiquement."""
+def load_rows(venue, date_from=None, date_to=None):
+    """Charge les snapshots d'une plateforme, triés chronologiquement."""
     rows = []
-    for day_dir in sorted(glob.glob(os.path.join(C.DATA_DIR, "*"))):
+    for day_dir in sorted(glob.glob(os.path.join(C.DATA_DIR, venue, "*"))):
         day = os.path.basename(day_dir)
         if (date_from and day < date_from) or (date_to and day > date_to):
             continue
@@ -125,8 +125,22 @@ def apply_overrides(pairs):
         setattr(C, key, type(getattr(C, key))(val))
 
 
+def describe(venue, rows):
+    span_h = (rows[-1]["ts"] - rows[0]["ts"]) / 3600
+    print(f"[{venue}] {len(rows):,} snapshots — {span_h:.1f} h de marché "
+          f"({datetime.fromtimestamp(rows[0]['ts'], timezone.utc):%Y-%m-%d %H:%M} → "
+          f"{datetime.fromtimestamp(rows[-1]['ts'], timezone.utc):%Y-%m-%d %H:%M} UTC)")
+    print(f"        frais {C.FEE_ROUNDTRIP_BPS:.0f} bps AR — fenêtre de murs "
+          f"[{C.WALL_MIN_DIST_BPS:.0f}, {C.WALL_MAX_DIST_BPS:.0f}] bps — "
+          f"TP min {C.MIN_TP_BPS:.0f} bps\n")
+
+
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--venue", default=C.LIVE_VENUE, choices=list(C.VENUES),
+                    help="plateforme à backtester")
+    ap.add_argument("--compare", action="store_true",
+                    help="rejoue la stratégie sur toutes les plateformes collectées")
     ap.add_argument("--from", dest="date_from", help="AAAA-MM-JJ inclus")
     ap.add_argument("--to",   dest="date_to",   help="AAAA-MM-JJ inclus")
     ap.add_argument("--set",  action="append", metavar="CLE=VALEUR",
@@ -135,19 +149,41 @@ def main():
     ap.add_argument("--csv", help="écrit les trades dans ce fichier")
     args = ap.parse_args()
 
+    # --compare : le point de décision de la phase 2. Même stratégie, mêmes
+    # seuils, mais chaque plateforme avec ses propres frais et sa propre
+    # géométrie de murs — c'est la comparaison qui tranche où trader.
+    if args.compare:
+        print(f"{'plateforme':<10} {'heures':>7} {'trades':>7} {'win%':>6} "
+              f"{'PnL$':>9} {'PF':>6} {'DD%':>6} {'frais$':>8}")
+        print("─" * 64)
+        for venue in C.VENUES:
+            C.use_venue(venue)
+            apply_overrides(args.set)
+            rows = load_rows(venue, args.date_from, args.date_to)
+            if not rows:
+                print(f"{venue:<10} {'aucune donnée collectée':>30}")
+                continue
+            h = (rows[-1]["ts"] - rows[0]["ts"]) / 3600
+            s, _ = run(rows)
+            if not s["trades"]:
+                print(f"{venue:<10} {h:>7.1f} {0:>7}  (aucun trade déclenché)")
+                continue
+            print(f"{venue:<10} {h:>7.1f} {s['trades']:>7} {s['winrate']:>6} "
+                  f"{s['pnl']:>9.2f} {s['pf']:>6} {s['max_dd']:>6} {s['fees']:>8.2f}")
+        return
+
+    C.use_venue(args.venue)
     apply_overrides(args.set)
 
     print("Chargement des snapshots...", flush=True)
-    rows = load_rows(args.date_from, args.date_to)
+    rows = load_rows(args.venue, args.date_from, args.date_to)
     if not rows:
         raise SystemExit(
-            "Aucune donnée dans data/. Lance d'abord le collecteur "
-            "(workflow « Collecte carnet ») et laisse-le tourner quelques jours.")
+            f"Aucune donnée dans {C.DATA_DIR}/{args.venue}/. Lance d'abord le "
+            f"collecteur (workflow « Collecte carnet ») et laisse-le tourner "
+            f"quelques jours.")
 
-    span_h = (rows[-1]["ts"] - rows[0]["ts"]) / 3600
-    print(f"{len(rows):,} snapshots — {span_h:.1f} h de marché "
-          f"({datetime.fromtimestamp(rows[0]['ts'], timezone.utc):%Y-%m-%d %H:%M} → "
-          f"{datetime.fromtimestamp(rows[-1]['ts'], timezone.utc):%Y-%m-%d %H:%M} UTC)\n")
+    describe(args.venue, rows)
 
     if args.sweep:
         grid = list(itertools.product((0.25, 0.35, 0.45, 0.55),   # OBI_ENTRY
