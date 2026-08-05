@@ -18,7 +18,10 @@ def _depth_notional(levels, mid, band_bps, side):
     """Notionnel cumulé (en $) des niveaux situés à moins de `band_bps` du mid."""
     limit = mid * (1 - band_bps / 10_000) if side == "bid" else mid * (1 + band_bps / 10_000)
     total = 0.0
-    for price, amount in levels:
+    # Les niveaux ccxt peuvent porter un 3e champ (timestamp chez Kraken) :
+    # on indexe au lieu de dépaqueter.
+    for lvl in levels:
+        price, amount = lvl[0], lvl[1]
         if (side == "bid" and price < limit) or (side == "ask" and price > limit):
             break                      # carnet trié : on peut sortir tôt
         total += price * amount
@@ -39,7 +42,8 @@ def _find_wall(levels, mid, side):
              else mid * (1 + C.WALL_BAND_BPS / 10_000))
 
     band = []
-    for price, amount in levels:
+    for lvl in levels:
+        price, amount = lvl[0], lvl[1]
         if (side == "bid" and price < limit) or (side == "ask" and price > limit):
             break
         band.append((price, price * amount))

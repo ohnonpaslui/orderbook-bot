@@ -17,7 +17,12 @@ SYMBOL   = "BTC/USD"
 BOT_ID   = "obi_walls"          # nom des fichiers state/ et trades/
 
 # ============================ COLLECTE =======================================
-BOOK_DEPTH        = 100         # niveaux demandés par côté (Kraken max 500)
+# 500 niveaux, pas 100. Mesuré sur le carnet réel BTC/USD Kraken :
+#   100 niveaux ne couvrent que ~15 bps autour du mid ;
+#   500 niveaux couvrent ~200 bps.
+# Comme les murs sont cherchés jusqu'à WALL_BAND_BPS (150), descendre sous 500
+# rendrait la détection de murs structurellement vide. Ne pas baisser.
+BOOK_DEPTH        = 500         # niveaux demandés par côté (max Kraken)
 SNAPSHOT_INTERVAL = 2.0         # secondes entre deux snapshots
 FLUSH_EVERY       = 150         # lignes gardées en mémoire avant écriture
 COMMIT_EVERY      = 600         # secondes entre deux commits git
@@ -42,6 +47,11 @@ WALL_MIN_NOTIONAL = 50_000.0    # ... et au moins 50 000 $ notionnel
 # --- signal OBI ---
 OBI_BAND      = 10              # bande utilisée comme signal principal (bps)
 OBI_EMA_SPAN  = 15              # lissage ~30 s à 2 s/snapshot
+# ATTENTION — seuil non validé. Sondage du carnet réel en séance calme :
+# OBI instantané ~ +0.01 sur la bande 10 bps, ~ +0.07 sur 50 bps. À 0.35 le bot
+# ne prendra que des déséquilibres francs, donc peu de trades. C'est LE premier
+# paramètre à balayer en phase 2 (`python backtest.py --sweep`), une fois qu'on
+# connaîtra la vraie distribution de l'OBI lissé.
 OBI_ENTRY     = 0.35            # |OBI lissé| requis pour armer un signal
 OBI_MIN_HOLD  = 10              # snapshots consécutifs au-dessus du seuil (~20 s)
 
