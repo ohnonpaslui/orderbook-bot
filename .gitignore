@@ -1,5 +1,8 @@
 __pycache__/
 *.pyc
+# Cache de bougies : retelechargeable gratuitement, inutile de le versionner.
+# Le carnet (data/*/AAAA-MM-JJ/) est versionne, lui : il est irrecuperable.
+data/*/candles_*.csv
 .venv/
 venv/
 *.local.csv

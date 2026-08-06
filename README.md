@@ -90,6 +90,38 @@ appel (budget 6000/min), d'où sa cadence de 5 s contre 2 s pour Kraken.
 
 ---
 
+## Couche analyse technique — et pourquoi la méthode appelle des futures
+
+`technical.py` implémente la méthode : MM 20/50/200 (golden/death cross), zones
+S/R par regroupement de pivots, retracements Fibonacci. Un setup n'existe que
+par **confluence** — le prix revient dans la zone Fibonacci, dans le sens de la
+tendance de fond, et cette zone recouvre un S/R historique.
+
+Le module est indépendant du support et du carnet : le même code tourne sur des
+bougies BTC ou MNQ. C'est ce qui a permis de le valider tout de suite sur 60
+jours de bougies gratuites, sans attendre la collecte du carnet.
+
+Mesuré sur 17 279 bougies 5 m (BTC, 60 jours) : **2,4 setups par jour**, et
+surtout — c'est le chiffre décisif — un **stop médian de 21 bps** (p10 9, p90 45).
+
+| Support | Frais AR | Frais / R au stop médian |
+|---|---|---|
+| Kraken taker 0,26 % | 52 bps | **248 %** |
+| Binance taker 0,10 % | 20 bps | **96 %** |
+| MNQ futures (~1,25 $ AR) | fixe/contrat | **1,3 %** |
+
+**La méthode produit naturellement des stops serrés, et c'est incompatible avec
+des frais proportionnels au notionnel.** Aucun réglage ne sauve la version
+crypto : il faudrait des stops de 149 bps sur Kraken, soit 7× ce que la
+structure de marché propose. Sur futures, la commission étant fixe par contrat,
+le même stop coûte 1,3 % du risque.
+
+C'est la raison pour laquelle les scalpeurs order flow travaillent sur futures
+et pas sur crypto spot. Le support reste à trancher (accès aux données CME), et
+la couche AT est prête pour les deux.
+
+---
+
 ## Mise en route
 
 ### Phase 1 — lancer la collecte (à faire maintenant)
