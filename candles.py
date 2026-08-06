@@ -18,7 +18,8 @@ import ccxt
 import config as C
 
 CACHE_TF = "5m"
-TF_MS    = {"1m": 60_000, "5m": 300_000, "15m": 900_000, "1h": 3_600_000}
+TF_MS    = {"1m": 60_000, "5m": 300_000, "15m": 900_000, "30m": 1_800_000,
+            "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
 COLUMNS  = ["ts", "open", "high", "low", "close", "volume"]
 
 
@@ -61,9 +62,13 @@ def fetch(venue, timeframe=CACHE_TF, days=90, use_cache=True, verbose=True):
     debut  = now_ms - days * 86_400_000
 
     rows  = load_cache(venue, timeframe) if use_cache else []
+    # Le cache ne s'étend que vers l'avant. Si on demande un historique plus
+    # ancien que ce qu'il contient, il faut repartir du début — sinon on
+    # travaillerait silencieusement sur une fenêtre plus courte que demandée.
+    if rows and int(rows[0]["ts"]) > debut + tf_ms:
+        rows = []
+
     connu = {int(r["ts"]) for r in rows}
-    # On reprend après la dernière bougie connue, sans jamais remonter
-    # au-delà de la fenêtre demandée.
     since = max(int(rows[-1]["ts"]) + tf_ms, debut) if rows else debut
 
     while since < now_ms:

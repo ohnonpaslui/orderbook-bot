@@ -1,9 +1,11 @@
 """
-Test bout en bout : strategie -> moteur -> ecriture gzip -> relecture backtest.
+Test d'integration : vraies bougies -> setup technique -> confirmation carnet
+-> ouverture -> TP / SL / TIMEOUT -> ecriture gzip -> relecture backtest.
 
-Fabrique un scenario synthetique contenant un trade gagnant (TP), un trade
-perdant (SL) et un trade expire (TIMEOUT), puis verifie que le backtest les
-retrouve tous les trois apres un aller-retour sur disque.
+Les bougies sont REELLES (donc les setups aussi) ; seuls les snapshots de
+carnet sont fabriques, puisqu'aucun historique de carnet n'existe. C'est le
+seul moyen de tester le raccord entre les deux couches avant la fin de la
+collecte.
 """
 import os
 import shutil
@@ -16,141 +18,163 @@ sys.path.insert(0, os.path.join(
 import config as C
 
 TMP = tempfile.mkdtemp(prefix="obtest_")
-C.DATA_DIR = os.path.join(TMP, "data")
-VENUE = "kraken"
+VENUE = C.LIVE_VENUE
 C.use_venue(VENUE)
 
 import backtest
+import candles as K
 import collector
 import features
-import paper_engine
-from strategy import ObiWallsStrategy
+import technical as T
 
-T0 = 1_754_000_000.0        # ancrage arbitraire
-
-# --- coherence de la config de chaque plateforme ---
-print("Fenetres derivees des frais :")
+print("=== coherence des plateformes ===")
 for v in C.VENUES:
-    C.use_venue(v)          # leve ValueError si la fenetre est vide
-    print(f"  {v:<8} frais {C.FEE_ROUNDTRIP_BPS:>3.0f} bps AR | "
-          f"murs [{C.WALL_MIN_DIST_BPS:>5.1f}, {C.WALL_MAX_DIST_BPS:>5.1f}] bps | "
-          f"TP min {C.MIN_TP_BPS:>5.1f} bps | "
-          f"frais/R au stop mini {C.FEE_ROUNDTRIP_BPS / C.WALL_MIN_DIST_BPS:>4.0%}")
+    C.use_venue(v)
+    print(f"  {v:<16} frais {C.FEE_ROUNDTRIP_BPS:>3.0f} bps AR | "
+          f"stop min {C.MIN_STOP_BPS:>5.1f} bps | TP min {C.MIN_TP_BPS:>5.1f} bps")
 C.use_venue(VENUE)
-print()
 
-# Le mur du scenario doit tomber dans la fenetre de la plateforme testee.
-WALL_BPS = (C.WALL_MIN_DIST_BPS + C.WALL_MAX_DIST_BPS) / 2
-print(f"Scenario construit avec un mur a {WALL_BPS:.0f} bps "
-      f"(fenetre {VENUE} : [{C.WALL_MIN_DIST_BPS:.0f}, {C.WALL_MAX_DIST_BPS:.0f}])")
+# ------------------------------------------------------ 1. un vrai setup
+print(f"\n=== 1. recherche d'un setup reel ({VENUE}, {C.TIMEFRAME}) ===")
+bougies = K.fetch(VENUE, C.TIMEFRAME, days=120, verbose=False)
+T.add_indicators(bougies)
+
+candidat = None
+for i in range(len(bougies) - 400, T.MM_LONG + T.PIVOT_N, -1):
+    s, _ = T.setup(bougies, i)
+    if not s:
+        continue
+    entree = bougies[i]["close"]
+    stop_bps = abs(entree - s["invalidation"]) / entree * 10_000
+    if stop_bps >= C.MIN_STOP_BPS * 1.2:       # assez large pour passer le filtre
+        candidat = (i, s, entree, stop_bps)
+        break
+assert candidat, "aucun setup exploitable trouve dans l'historique"
+
+i, s, prix_ref, stop_bps = candidat
+sens = "LONG" if s["direction"] > 0 else "SHORT"
+print(f"  indice {i} — {sens} — zone {s['zone'][0]:,.0f}-{s['zone'][1]:,.0f}")
+print(f"  invalidation {s['invalidation']:,.0f} — stop {stop_bps:.0f} bps "
+      f"(min requis {C.MIN_STOP_BPS:.0f}) — S/R {s['sr']['prix']:,.0f} "
+      f"({s['sr']['touches']} touches)")
+
+# ------------------------------------------------ 2. carnet qui confirme
+tf_sec = K.TF_MS[C.TIMEFRAME] / 1000
+# Les snapshots doivent tomber APRES la cloture de la bougie i, sinon le
+# backtest n'aura pas encore arme ce setup.
+t0 = bougies[i]["ts"] / 1000 + tf_sec + 1
+
+obi_confirme = 0.60 * s["direction"]
+buf = C.SL_BUFFER_ATR * (s["atr"] or 0.0)
+if s["direction"] > 0:
+    sl = s["invalidation"] - buf
+    risque = prix_ref - sl
+    cible = prix_ref + C.RR * risque
+else:
+    sl = s["invalidation"] + buf
+    risque = sl - prix_ref
+    cible = prix_ref - C.RR * risque
 
 
-def row(ts, mid, obi, bid_wall_bps=0.0, ask_wall_bps=0.0):
-    """Fabrique une ligne de features coherente avec le schema COLUMNS."""
+def ligne(ts, mid, obi):
     r = {"ts": round(ts, 2), "best_bid": round(mid - 0.5, 2),
          "best_ask": round(mid + 0.5, 2), "mid": round(mid, 2),
-         "microprice": round(mid, 4),
-         "spread_bps": round(1.0 / mid * 10_000, 3)}
-    for band in C.DEPTH_BANDS_BPS:
-        r[f"bid_{band}"] = 1_000_000.0
-        r[f"ask_{band}"] = 1_000_000.0
-        r[f"obi_{band}"] = obi
-    for side, bps in (("bid", bid_wall_bps), ("ask", ask_wall_bps)):
-        sign = -1 if side == "bid" else 1
-        px = round(mid * (1 + sign * bps / 10_000), 2) if bps else 0.0
-        r[f"{side}_wall_px"]  = px
-        r[f"{side}_wall_sz"]  = 2_000_000.0 if bps else 0.0
-        r[f"{side}_wall_bps"] = bps
+         "microprice": round(mid, 4), "spread_bps": round(1.0 / mid * 10_000, 3)}
+    for bande in C.DEPTH_BANDS_BPS:
+        r[f"bid_{bande}"] = 1_000_000.0
+        r[f"ask_{bande}"] = 1_000_000.0
+        r[f"obi_{bande}"] = obi
+    for cote in ("bid", "ask"):
+        r[f"{cote}_wall_px"] = 0.0
+        r[f"{cote}_wall_sz"] = 0.0
+        r[f"{cote}_wall_bps"] = 0.0
     return r
 
 
-# ------------------------------------------------------------------ scenario
-rows, ts, mid = [], T0, 60_000.0
-
-def phase(n, obi=0.0, drift=0.0, wall=0.0):
-    global ts, mid
+def phase(rows, ts, mid, n, obi, derive=0.0):
     for _ in range(n):
-        rows.append(row(ts, mid, obi, bid_wall_bps=wall))
-        ts  += C.SNAPSHOT_INTERVAL
-        mid += drift
+        rows.append(ligne(ts, mid, obi))
+        ts += C.SNAPSHOT_INTERVAL
+        mid += derive
+    return ts, mid
 
-# Le stop tombe a ~WALL_BPS + SL_BUFFER sous l'entree ; le TP a RR fois cette
-# distance. Les derives ci-dessous sont dimensionnees pour atteindre l'un ou
-# l'autre en ~150 snapshots.
-risque_usd = 60_000 * (WALL_BPS + C.SL_BUFFER_BPS) / 10_000
-derive_tp  = C.RR * risque_usd / 140
-derive_sl  = risque_usd / 140
 
-# 1) calme : rodage de l'EMA, aucun signal attendu
-phase(120)
-# 2) pression acheteuse + mur dans la fenetre -> ouverture longue
-phase(60, obi=0.60, wall=WALL_BPS)
-# 3) le prix monte jusqu'au TP
-phase(150, obi=0.60, drift=+derive_tp, wall=WALL_BPS)
-# 4) cooldown (600 s = 300 snapshots)
-phase(320)
-# 5) nouveau signal, puis chute jusqu'au SL
-phase(60, obi=0.60, wall=WALL_BPS)
-phase(150, obi=0.60, drift=-derive_sl, wall=WALL_BPS)
-# 6) cooldown puis signal qui stagne -> TIMEOUT (MAX_HOLD_SEC = 4 h = 7200 snap.)
-phase(320)
-phase(60, obi=0.60, wall=WALL_BPS)
-phase(7400, obi=0.60, wall=WALL_BPS)
+print("\n=== 2. scenarios de carnet ===")
+scenarios = {}
+for nom, atteindre in (("TP", cible), ("SL", sl)):
+    rows, ts, mid = [], t0, prix_ref
+    ts, mid = phase(rows, ts, mid, 60, obi_confirme)          # confirmation
+    derive = (atteindre - mid) / 200 * 1.2                    # marche vers la cible
+    ts, mid = phase(rows, ts, mid, 200, obi_confirme, derive)
+    scenarios[nom] = rows
 
-print(f"Scenario : {len(rows):,} snapshots, "
-      f"{(rows[-1]['ts'] - rows[0]['ts']) / 3600:.1f} h simulees\n")
+# TIMEOUT : confirmation puis stagnation au-dela de MAX_HOLD_SEC
+rows, ts, mid = [], t0, prix_ref
+ts, mid = phase(rows, ts, mid, 60, obi_confirme)
+ts, mid = phase(rows, ts, mid, int(C.MAX_HOLD_SEC / C.SNAPSHOT_INTERVAL) + 60,
+                obi_confirme)
+scenarios["TIMEOUT"] = rows
 
-# ------------------------------------------------- ecriture disque (gzip)
+for nom, rows in scenarios.items():
+    print(f"  {nom:<8} {len(rows):>5} snapshots, "
+          f"{rows[0]['mid']:,.0f} -> {rows[-1]['mid']:,.0f}")
+
+# --------------------------------------- 3. aller-retour disque + backtest
+print("\n=== 3. ecriture gzip / relecture / backtest ===")
+resultats = {}
+for nom, rows in scenarios.items():
+    C.DATA_DIR = os.path.join(TMP, nom)          # un dossier par scenario
+    buf = list(rows)
+    while buf:
+        chunk, buf = buf[:C.FLUSH_EVERY], buf[C.FLUSH_EVERY:]
+        collector.flush(VENUE, chunk)
+
+    relus = backtest.load_rows(VENUE)
+    assert len(relus) == len(rows), f"{nom} : {len(relus)} relus / {len(rows)} ecrits"
+    assert set(relus[0]) == set(features.COLUMNS), f"{nom} : schema altere"
+
+    stats, trades = backtest.run(relus, bougies=bougies)
+    resultats[nom] = (stats, trades)
+    if trades:
+        t = trades[0]
+        print(f"  {nom:<8} {t['side']:<4} {t['result']:<8} "
+              f"entree {t['entry']:>10,.2f} sortie {t['exit']:>10,.2f} "
+              f"pnl {t['pnl']:>+7.2f}$ frais {t['fees']:>5.2f}$ "
+              f"r {t['r']:>+5.2f} duree {t['hold_s']:>6}s")
+    else:
+        print(f"  {nom:<8} aucun trade")
+
+# ------------------------------------------------------------ 4. controles
+print("\n=== 4. controles ===")
+for nom in ("TP", "SL", "TIMEOUT"):
+    stats, trades = resultats[nom]
+    assert trades, f"{nom} : aucun trade declenche"
+    assert trades[0]["result"] == nom, \
+        f"{nom} : resultat obtenu = {trades[0]['result']}"
+    capital = C.START_CAPITAL + sum(t["pnl"] for t in trades)
+    assert abs(capital - stats["capital"]) < 0.05, f"{nom} : capital incoherent"
+print("  les trois sorties (TP, SL, TIMEOUT) se declenchent")
+print("  capital reconcilie sur les trois scenarios")
+
+tp = resultats["TP"][1][0]
+sl_t = resultats["SL"][1][0]
+assert tp["pnl"] > 0, "un TP doit rester gagnant apres frais"
+assert sl_t["pnl"] < 0, "un SL doit etre perdant"
+print(f"  frais {tp['fees']:.2f}$ sur un TP a {tp['r']:+.2f}R "
+      f"(stop {stop_bps:.0f} bps)")
+
+# Le carnet doit vraiment servir de filtre : sans confirmation, rien ne passe.
+print("\n=== 5. le carnet filtre-t-il ? ===")
+C.DATA_DIR = os.path.join(TMP, "sansconf")
+rows, ts, mid = [], t0, prix_ref
+ts, mid = phase(rows, ts, mid, 260, 0.0)         # OBI neutre = pas de confirmation
 buf = list(rows)
 while buf:
     chunk, buf = buf[:C.FLUSH_EVERY], buf[C.FLUSH_EVERY:]
-    collector.flush(VENUE, chunk)          # flush() vide la liste qu'on lui passe
-
-fichiers = []
-for d, _, fs in os.walk(C.DATA_DIR):
-    fichiers += [os.path.join(d, f) for f in fs]
-taille = sum(os.path.getsize(f) for f in fichiers)
-print(f"Ecriture : {len(fichiers)} fichiers .csv.gz, {taille / 1024:.0f} Ko "
-      f"({taille / len(rows):.1f} octets/snapshot compresse)")
-print(f"           -> {taille / len(rows) * 43200 / 1024 / 1024:.2f} Mo/jour a 2 s\n")
-
-# ------------------------------------------------- relecture
-relus = backtest.load_rows(VENUE)
-print(f"Relecture : {len(relus):,} lignes (ecrites : {len(rows):,})")
-assert len(relus) == len(rows), "perte de lignes a l'aller-retour gzip !"
-assert set(relus[0]) == set(features.COLUMNS), "schema altere a la relecture"
-ecarts = [k for k in features.COLUMNS if abs(relus[0][k] - rows[0][k]) > 1e-6]
-assert not ecarts, f"valeurs alterees : {ecarts}"
-print("           schema et valeurs intacts\n")
-
-# ------------------------------------------------- backtest
-stats, trades = backtest.run(relus, verbose=True)
-print("\n--- statistiques ---")
-for k, v in stats.items():
-    print(f"  {k:<10} {v}")
-
-print("\n--- trades ---")
-for t in trades:
-    print(f"  {t['side']:<4} {t['result']:<8} entree={t['entry']:>9.2f} "
-          f"sortie={t['exit']:>9.2f} pnl={t['pnl']:>+8.2f}$ "
-          f"frais={t['fees']:>6.2f}$ r={t['r']:>+5.2f} duree={t['hold_s']:>6}s")
-
-resultats = [t["result"] for t in trades]
-assert "TP" in resultats,      f"aucun TP declenche : {resultats}"
-assert "SL" in resultats,      f"aucun SL declenche : {resultats}"
-assert "TIMEOUT" in resultats, f"aucun TIMEOUT declenche : {resultats}"
-
-tp = next(t for t in trades if t["result"] == "TP")
-sl = next(t for t in trades if t["result"] == "SL")
-assert tp["pnl"] > 0, "un TP devrait etre gagnant apres frais"
-assert sl["pnl"] < 0, "un SL devrait etre perdant"
-assert tp["fees"] > 0, "les frais doivent etre preleves"
-
-# Le PnL doit reconcilier avec le capital final
-capital = C.START_CAPITAL + sum(t["pnl"] for t in trades)
-assert abs(capital - stats["capital"]) < 0.05, \
-    f"incoherence capital : {capital:.2f} vs {stats['capital']}"
-print(f"\n  Reconciliation capital OK : {capital:.2f}$")
+    collector.flush(VENUE, chunk)
+stats, trades = backtest.run(backtest.load_rows(VENUE), bougies=bougies)
+assert not trades, f"un trade s'est ouvert sans confirmation du carnet : {trades}"
+print("  OBI neutre -> aucun trade : le carnet filtre bien")
 
 shutil.rmtree(TMP, ignore_errors=True)
 print("\nTOUS LES TESTS PIPELINE PASSENT")

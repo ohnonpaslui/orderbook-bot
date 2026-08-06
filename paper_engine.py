@@ -108,7 +108,8 @@ def step(bot, state, row, signal, strat, record=True):
                 "r": round(pnl / pos["risk_usd"], 2) if pos["risk_usd"] else 0.0,
                 "hold_s": int(ts - pos["opened_ts"]),
                 "capital": state["capital"],
-                "wall_px": pos.get("wall_px", 0), "obi_ema": pos.get("obi_ema", 0),
+                "stop_bps": pos.get("stop_bps", 0), "sr": pos.get("sr", 0),
+                "touches": pos.get("touches", 0), "obi_ema": pos.get("obi_ema", 0),
             }
             if record:
                 append_trade(bot, trade)
@@ -144,6 +145,9 @@ def step(bot, state, row, signal, strat, record=True):
         changed = True
         events.append(f"[{bot}] {signal['side'].upper()} @ {signal['entry']:.2f} "
                       f"(SL {signal['sl']:.2f} / TP {signal['tp']:.2f}) "
-                      f"mur {signal['wall_px']:.0f} — OBI {signal['obi_ema']:+.2f}")
+                      f"stop {signal.get('stop_bps', 0):.0f} bps — "
+                      f"S/R {signal.get('sr', 0):.0f} "
+                      f"({signal.get('touches', 0)} touches) — "
+                      f"OBI {signal['obi_ema']:+.2f}")
 
     return state, changed, events

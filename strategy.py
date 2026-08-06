@@ -1,27 +1,35 @@
 """
-strategy.py — Détecteur de signal « OBI + mur de liquidité ».
+strategy.py — Setup technique + confirmation par le carnet d'ordres.
 
-Idée : l'OBI dit dans quel sens la pression s'exerce, le mur dit où placer le
-stop. L'un sans l'autre ne suffit pas — un OBI fort sans mur donne un trade
-sans invalidation propre, un mur sans OBI donne un support sans catalyseur.
+Répartition des rôles, calquée sur la méthode :
 
-Conditions d'entrée (long ; short symétrique) :
-  1. OBI lissé (EMA) au-dessus de OBI_ENTRY ...
-  2. ... de façon soutenue pendant OBI_MIN_HOLD snapshots consécutifs
-     — un pic d'une seconde est du bruit ou du spoofing ;
-  3. un mur d'achat existe entre WALL_MIN_DIST_BPS et WALL_MAX_DIST_BPS
-     sous le prix : c'est l'ancrage du stop ;
-  4. le spread est normal (MAX_SPREAD_BPS) ;
-  5. le TP résultant couvre MIN_TP_BPS, sinon les frais mangent le trade.
+  LA STRUCTURE DÉCIDE     (technical.py, bougies 15 m)
+      direction  : empilement MM 20/50/200
+      zone       : retracement Fibonacci en confluence avec un S/R
+      stop       : invalidation du retracement (départ de la jambe)
 
-La classe est volontairement stateful et alimentée snapshot par snapshot :
-le backtest la rejoue exactement comme le live la consomme.
+  LE CARNET CONFIRME      (features.py, snapshots 2 s)
+      pression   : OBI lissé dans le sens du setup, soutenu
+      chemin     : aucun mur adverse entre l'entrée et l'objectif
+
+C'est l'inverse d'un bot OBI classique, et c'est délibéré. Deux raisons :
+
+1. Fidélité à la méthode — sur un ladder, le trader repère son niveau en
+   analyse technique, puis se sert du DOM pour choisir la seconde d'entrée.
+2. Contrainte mesurée — ancrer le stop sur un mur exigeait un carnet couvrant
+   50 à 150 bps. Les perpétuels n'en renvoient que 19. En prenant le stop dans
+   la structure, l'OBI suffit sur les 10 premiers bps, que tout le monde
+   fournit.
+
+La classe est stateful et alimentée snapshot par snapshot : le backtest la
+rejoue exactement comme le live la consomme.
 """
 
 import config as C
+import technical as T
 
 
-class ObiWallsStrategy:
+class SetupBookStrategy:
 
     def __init__(self):
         self.obi_ema      = None
@@ -29,7 +37,9 @@ class ObiWallsStrategy:
         self.streak       = 0        # snapshots consécutifs dans le même sens
         self.streak_side  = None
         self.cooldown_til = 0.0
-        self.last_reject  = None     # dernière raison de rejet, pour le debug
+        self.setup        = None     # setup technique courant, ou None
+        self.setup_ts     = 0.0
+        self.last_reject  = None
 
     # ---------------------------------------------------------------- état
     def notify_close(self, ts):
@@ -37,20 +47,33 @@ class ObiWallsStrategy:
         self.cooldown_til = ts + C.COOLDOWN_SEC
         self.streak, self.streak_side = 0, None
 
+    def update_candles(self, candles, i=None):
+        """
+        Recalcule le setup technique. À appeler à chaque clôture de bougie —
+        pas à chaque snapshot : la structure ne bouge qu'au rythme des bougies.
+        """
+        if i is None:
+            i = len(candles) - 1
+        if i < T.MM_LONG + T.PIVOT_N:
+            self.setup = None
+            return None
+        setup, raison = T.setup(candles, i)
+        self.setup = setup
+        self.setup_ts = candles[i]["ts"] / 1000.0
+        return raison
+
     # ------------------------------------------------------------- signal
     def update(self, row):
         """
-        Consomme un snapshot (dict au format features.compute) et retourne
-        un signal dict ou None. Doit être appelé sur CHAQUE snapshot, même
-        quand une position est ouverte, pour que l'EMA reste continue.
+        Consomme un snapshot de carnet et retourne un signal dict ou None.
+        Doit être appelé sur CHAQUE snapshot, même position ouverte, pour que
+        l'EMA de l'OBI reste continue.
         """
         obi = row[f"obi_{C.OBI_BAND}"]
-
         alpha = 2 / (C.OBI_EMA_SPAN + 1)
         self.obi_ema = obi if self.obi_ema is None else alpha * obi + (1 - alpha) * self.obi_ema
         self.n_updates += 1
 
-        # --- entretien du streak directionnel ---
         side = ("buy"  if self.obi_ema >=  C.OBI_ENTRY else
                 "sell" if self.obi_ema <= -C.OBI_ENTRY else None)
         if side and side == self.streak_side:
@@ -60,57 +83,84 @@ class ObiWallsStrategy:
         else:
             self.streak, self.streak_side = 0, None
 
-        # --- filtres de recevabilité ---
         if self.n_updates < C.OBI_EMA_SPAN:
             return self._reject("warmup")
         if row["ts"] < self.cooldown_til:
             return self._reject("cooldown")
-        if side is None or self.streak < C.OBI_MIN_HOLD:
-            return self._reject("obi")
+
+        # --- 1. la structure doit avoir armé un setup ---
+        s = self.setup
+        if s is None:
+            return self._reject("pas de setup technique")
+
+        attendu = "buy" if s["direction"] > 0 else "sell"
+        prix = row["mid"]
+        bas, haut = s["zone"]
+        if not (bas <= prix <= haut):
+            return self._reject("prix sorti de la zone")
+
+        # --- 2. le carnet doit confirmer dans le sens du setup ---
+        if side != attendu:
+            return self._reject("carnet ne confirme pas")
+        if self.streak < C.OBI_MIN_HOLD:
+            return self._reject("confirmation trop breve")
         if row["spread_bps"] > C.MAX_SPREAD_BPS:
             return self._reject("spread")
 
-        # --- le mur du côté du signal sert d'ancrage au stop ---
-        wall_side = "bid" if side == "buy" else "ask"
-        wall_px  = row[f"{wall_side}_wall_px"]
-        wall_bps = row[f"{wall_side}_wall_bps"]
-        if wall_px <= 0:
-            return self._reject("pas de mur")
-        if not (C.WALL_MIN_DIST_BPS <= wall_bps <= C.WALL_MAX_DIST_BPS):
-            return self._reject(f"mur a {wall_bps:.0f} bps hors fenetre")
-
-        # --- géométrie du trade : entrée en taker, stop derrière le mur ---
-        buf = C.SL_BUFFER_BPS / 10_000
-        if side == "buy":
-            entry = row["best_ask"]                  # on paie l'offre
-            sl    = wall_px * (1 - buf)
+        # --- 3. géométrie : stop structurel, entrée en taker ---
+        buf = C.SL_BUFFER_ATR * (s["atr"] or 0.0)
+        if attendu == "buy":
+            entry = row["best_ask"]
+            sl    = s["invalidation"] - buf
             risk  = entry - sl
             tp    = entry + C.RR * risk
         else:
-            entry = row["best_bid"]                  # on vend sur la demande
-            sl    = wall_px * (1 + buf)
+            entry = row["best_bid"]
+            sl    = s["invalidation"] + buf
             risk  = sl - entry
             tp    = entry - C.RR * risk
 
         if risk <= 0:
-            return self._reject("risque nul")
+            return self._reject("invalidation du mauvais cote")
+
+        stop_bps = risk / entry * 10_000
+        if stop_bps < C.MIN_STOP_BPS:
+            # Le stop vient de la structure : on ne l'élargit pas pour faire
+            # rentrer le trade, on écarte le setup.
+            return self._reject(f"stop {stop_bps:.0f} bps < {C.MIN_STOP_BPS:.0f}")
 
         tp_bps = abs(tp - entry) / entry * 10_000
         if tp_bps < C.MIN_TP_BPS:
             return self._reject(f"TP {tp_bps:.0f} bps < frais")
 
-        self.streak, self.streak_side = 0, None      # ne pas re-signaler en boucle
+        # --- 4. aucun mur adverse ne doit barrer le chemin de l'objectif ---
+        if self._chemin_bloque(row, attendu, entry, tp):
+            return self._reject("mur adverse sur le chemin")
+
+        self.streak, self.streak_side = 0, None      # pas de re-signal en boucle
         self.last_reject = None
         return {
-            "side":     side,
-            "entry":    round(entry, 2),
-            "sl":       round(sl, 2),
-            "tp":       round(tp, 2),
-            "wall_px":  wall_px,
-            "wall_sz":  row[f"{wall_side}_wall_sz"],
-            "obi_ema":  round(self.obi_ema, 4),
-            "spread":   row["spread_bps"],
+            "side":      attendu,
+            "entry":     round(entry, 2),
+            "sl":        round(sl, 2),
+            "tp":        round(tp, 2),
+            "obi_ema":   round(self.obi_ema, 4),
+            "stop_bps":  round(stop_bps, 1),
+            "force":     s["force"],
+            "sr":        round(s["sr"]["prix"], 2),
+            "touches":   s["sr"]["touches"],
         }
+
+    def _chemin_bloque(self, row, side, entry, tp):
+        """
+        Un gros mur passif entre l'entrée et l'objectif rend le TP improbable.
+        Pour un achat c'est un mur à la vente (ask) situé sous le TP.
+        """
+        cote = "ask" if side == "buy" else "bid"
+        px   = row[f"{cote}_wall_px"]
+        if px <= 0 or row[f"{cote}_wall_sz"] < C.BLOQUANT_MIN_NOTIONAL:
+            return False
+        return entry < px < tp if side == "buy" else tp < px < entry
 
     def _reject(self, reason):
         self.last_reject = reason

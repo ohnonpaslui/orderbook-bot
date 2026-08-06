@@ -45,10 +45,19 @@ BACKOFF_SEC    = 300
 
 
 def path_for(venue, ts):
-    """Un fichier par heure UTC : découpage naturel, fichiers de taille stable."""
+    """
+    Un fichier par tranche de 10 minutes UTC.
+
+    Le découpage n'est pas cosmétique. Avec des fichiers horaires réécrits à
+    chaque commit, git stocke une copie complète du .gz à chaque fois (les
+    fichiers compressés ne se « deltifient » pas) : mesuré, ~3.5x le volume
+    utile dans l'historique. Une tranche alignée sur COMMIT_EVERY est écrite
+    puis figée, donc stockée une seule fois.
+    """
     d = datetime.fromtimestamp(ts, timezone.utc)
+    tranche = f"{d.hour:02d}{d.minute // 10}0"
     return os.path.join(C.DATA_DIR, venue,
-                        d.strftime("%Y-%m-%d"), d.strftime("%H") + ".csv.gz")
+                        d.strftime("%Y-%m-%d"), tranche + ".csv.gz")
 
 
 def flush(venue, buffer):
@@ -146,12 +155,17 @@ def main():
     start = time.time()
     stop  = threading.Event()
 
-    workers = {v: VenueCollector(v, stop) for v in C.VENUES}
+    actives = [v for v, cfg in C.VENUES.items() if cfg.get("collect", True)]
+    if not actives:
+        raise SystemExit("Aucune plateforme active : mettre `collect=True` "
+                         "sur au moins une entrée de C.VENUES.")
+
+    workers = {v: VenueCollector(v, stop) for v in actives}
     for w in workers.values():
         w.start()
 
     resume = ", ".join(f"{v} ({C.VENUES[v]['symbol']}, {C.VENUES[v]['interval']}s, "
-                       f"{C.VENUES[v]['depth']} niv.)" for v in C.VENUES)
+                       f"{C.VENUES[v]['depth']} niv.)" for v in actives)
     print(f"Collecteur demarre — {resume}", flush=True)
 
     def drain():

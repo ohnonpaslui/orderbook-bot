@@ -20,11 +20,13 @@ from datetime import datetime, timezone
 
 import ccxt
 
+import candles as K
 import collector
 import config as C
 import features
 import paper_engine
-from strategy import ObiWallsStrategy
+import technical as T
+from strategy import SetupBookStrategy
 
 MAX_RUNTIME = int(os.environ.get("MAX_RUNTIME", "0"))
 GIT_PUSH    = os.environ.get("GIT_PUSH") == "1"
@@ -38,8 +40,24 @@ def main():
     start = time.time()
     C.use_venue(C.LIVE_VENUE)       # fixe frais, symbole, fenêtre de murs
     ex    = getattr(ccxt, C.EXCHANGE)({"enableRateLimit": True, "timeout": 25000})
-    strat = ObiWallsStrategy()
+    strat = SetupBookStrategy()
     state = paper_engine.load_state(C.BOT_ID)
+
+    # La structure ne bouge qu'à la clôture d'une bougie : inutile de
+    # retélécharger l'historique à chaque snapshot de carnet.
+    tf_sec = K.TF_MS[C.TIMEFRAME] / 1000
+
+    def rafraichir_structure():
+        bougies = K.fetch(C.VENUE, C.TIMEFRAME, days=30, verbose=False)
+        T.add_indicators(bougies)
+        raison = strat.update_candles(bougies)
+        etat = ("aucun setup" if strat.setup is None
+                else f"setup {'LONG' if strat.setup['direction'] > 0 else 'SHORT'} "
+                     f"zone {strat.setup['zone'][0]:.0f}-{strat.setup['zone'][1]:.0f}")
+        print(f"[structure] {etat}" + (f" ({raison})" if raison else ""), flush=True)
+        return bougies[-1]["ts"] / 1000 if bougies else 0.0
+
+    derniere_bougie = rafraichir_structure()
 
     buffer, n_ok, n_err = [], 0, 0
     last_commit  = time.time()
@@ -75,6 +93,14 @@ def main():
 
         buffer.append(row)
         n_ok += 1
+
+        # Nouvelle bougie clôturée -> on recalcule le setup technique.
+        if cycle_start >= derniere_bougie + 2 * tf_sec:
+            try:
+                derniere_bougie = rafraichir_structure()
+            except Exception as e:
+                print(f"[structure] {type(e).__name__}: {e}", flush=True)
+                derniere_bougie = cycle_start   # on retentera au prochain pas
 
         # L'EMA de l'OBI doit voir chaque snapshot, y compris pendant une
         # position ouverte — sinon elle repart de zéro à chaque sortie.

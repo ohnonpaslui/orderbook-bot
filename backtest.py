@@ -20,9 +20,11 @@ import itertools
 import os
 from datetime import datetime, timezone
 
+import candles as K
 import config as C
 import paper_engine
-from strategy import ObiWallsStrategy
+import technical as T
+from strategy import SetupBookStrategy
 
 FLOAT_COLS = None       # rempli au premier chargement
 
@@ -80,15 +82,46 @@ def stats(trades, equity):
 
 
 # ----------------------------- Moteur -----------------------------------------
-def run(rows, verbose=False):
+def charger_bougies(venue, rows):
+    """
+    Bougies couvrant la période des snapshots, indicateurs déjà calculés.
+
+    Une marge de MM_LONG bougies avant le premier snapshot est indispensable :
+    sans elle la MM200 serait indéfinie sur tout le début du backtest.
+    """
+    tf_ms  = K.TF_MS[C.TIMEFRAME]
+    marge  = (T.MM_LONG + T.PIVOT_N + 10) * tf_ms
+    jours  = ((rows[-1]["ts"] - rows[0]["ts"]) * 1000 + marge) / 86_400_000
+    bougies = K.fetch(venue, C.TIMEFRAME, days=max(3, int(jours) + 2), verbose=False)
+    T.add_indicators(bougies)
+    return bougies
+
+
+def run(rows, bougies=None, venue=None, verbose=False):
     """Rejoue les snapshots. Retourne (stats, trades)."""
-    strat  = ObiWallsStrategy()
+    if bougies is None:
+        bougies = charger_bougies(venue or C.VENUE, rows)
+
+    strat  = SetupBookStrategy()
     state  = {"capital": C.START_CAPITAL, "position": None, "wins": 0,
               "losses": 0, "fees_paid": 0.0}
     equity = [C.START_CAPITAL]
     trades, rejects = [], {}
 
+    tf_sec = K.TF_MS[C.TIMEFRAME] / 1000
+    i_bougie = -1
+
     for row in rows:
+        # Avance jusqu'à la dernière bougie CLÔTURÉE avant ce snapshot.
+        # Utiliser une bougie encore en formation reviendrait à lire le futur.
+        suivant = i_bougie
+        while (suivant + 1 < len(bougies)
+               and bougies[suivant + 1]["ts"] / 1000 + tf_sec <= row["ts"]):
+            suivant += 1
+        if suivant != i_bougie:
+            i_bougie = suivant
+            strat.update_candles(bougies, i_bougie)
+
         # L'EMA doit voir chaque snapshot ; le signal n'est retenu que hors position.
         signal = strat.update(row)
         if state["position"]:
@@ -130,8 +163,8 @@ def describe(venue, rows):
     print(f"[{venue}] {len(rows):,} snapshots — {span_h:.1f} h de marché "
           f"({datetime.fromtimestamp(rows[0]['ts'], timezone.utc):%Y-%m-%d %H:%M} → "
           f"{datetime.fromtimestamp(rows[-1]['ts'], timezone.utc):%Y-%m-%d %H:%M} UTC)")
-    print(f"        frais {C.FEE_ROUNDTRIP_BPS:.0f} bps AR — fenêtre de murs "
-          f"[{C.WALL_MIN_DIST_BPS:.0f}, {C.WALL_MAX_DIST_BPS:.0f}] bps — "
+    print(f"        frais {C.FEE_ROUNDTRIP_BPS:.0f} bps AR — structure "
+          f"{C.TIMEFRAME} — stop min {C.MIN_STOP_BPS:.0f} bps — "
           f"TP min {C.MIN_TP_BPS:.0f} bps\n")
 
 
@@ -164,7 +197,7 @@ def main():
                 print(f"{venue:<10} {'aucune donnée collectée':>30}")
                 continue
             h = (rows[-1]["ts"] - rows[0]["ts"]) / 3600
-            s, _ = run(rows)
+            s, _ = run(rows, venue=venue)
             if not s["trades"]:
                 print(f"{venue:<10} {h:>7.1f} {0:>7}  (aucun trade déclenché)")
                 continue
@@ -186,7 +219,10 @@ def main():
     describe(args.venue, rows)
 
     if args.sweep:
-        grid = list(itertools.product((0.25, 0.35, 0.45, 0.55),   # OBI_ENTRY
+        # Bougies chargées une seule fois : le balayage ne change que les
+        # seuils de confirmation, pas la structure.
+        bougies = charger_bougies(args.venue, rows)
+        grid = list(itertools.product((0.15, 0.25, 0.35, 0.45),   # OBI_ENTRY
                                       (5, 10, 20),                # OBI_MIN_HOLD
                                       (1.5, 2.0, 3.0)))           # RR
         print(f"{'OBI':>5} {'HOLD':>5} {'RR':>4} │ {'trades':>6} {'win%':>6} "
@@ -194,7 +230,7 @@ def main():
         print("─" * 66)
         for obi, hold, rr in grid:
             C.OBI_ENTRY, C.OBI_MIN_HOLD, C.RR = obi, hold, rr
-            s, _ = run(rows)
+            s, _ = run(rows, bougies=bougies)
             if not s["trades"]:
                 print(f"{obi:>5} {hold:>5} {rr:>4} │ {'aucun trade':>6}")
                 continue
@@ -202,7 +238,7 @@ def main():
                   f"{s['pnl']:>9.2f} {s['pf']:>6} {s['max_dd']:>6} {s['avg_r']:>6}")
         return
 
-    s, trades = run(rows, verbose=True)
+    s, trades = run(rows, venue=args.venue, verbose=True)
     print("\n" + "═" * 50)
     if not s["trades"]:
         print("Aucun trade déclenché sur la période.")

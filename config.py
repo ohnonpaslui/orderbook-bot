@@ -23,25 +23,51 @@ Trois groupes :
 #   Binance : /depth limit=5000 coûte 250 de poids, budget 6000/min.
 #             5 s = 12 appels/min = 3000/min, la moitié du budget.
 VENUES = {
-    "kraken": dict(
-        exchange="kraken", symbol="BTC/USD",
-        depth=500, interval=2.0, fee_pct=0.26, span_bps=170.0,
+    # Perpétuels Binance : le seul support gratuit dont les frais passent le
+    # seuil de viabilité avec les stops que produit la méthode (27 % du risque
+    # en 15 m — voir le tableau du README). API publique, aucun compte requis
+    # pour collecter et faire du paper trading.
+    "binance_futures": dict(
+        exchange="binanceusdm", symbol="BTC/USDT:USDT",
+        depth=1000, interval=2.0, fee_pct=0.05, span_bps=18.0, collect=True,
     ),
+    # Profondeur ramenée de 5000 à 1000 : les murs ne servent plus d'ancrage
+    # au stop, seulement à détecter un blocage proche. 1000 niveaux couvrent
+    # 36 bps (mesuré), largement assez — et le poids API passe de 250 à 50,
+    # ce qui permet la même cadence que les autres.
     "binance": dict(
         exchange="binance", symbol="BTC/USDT",
-        depth=5000, interval=5.0, fee_pct=0.10, span_bps=100.0,
+        depth=1000, interval=2.0, fee_pct=0.10, span_bps=36.0, collect=False,
+    ),
+    # Kraken reste collecté : c'est ta plateforme actuelle, et la comparaison
+    # en phase 2 doit se faire sur données réelles, pas sur l'estimation de
+    # frais qui l'a écartée sur le papier.
+    "kraken": dict(
+        exchange="kraken", symbol="BTC/USD",
+        depth=500, interval=2.0, fee_pct=0.26, span_bps=170.0, collect=True,
     ),
 }
 
-# Plateforme utilisée par run_bot.py en phase 3. À trancher en phase 2, sur
-# les données, pas sur l'intuition.
-LIVE_VENUE = "kraken"
+# Chaque plateforme collectée coûte ~3.4 Mo/jour. Binance spot est désactivée
+# par défaut : elle est dominée par les perpétuels côté frais (20 vs 10 bps)
+# sans rien apporter de plus. Passer `collect` à True pour la réactiver.
+
+# Plateforme utilisée par run_bot.py en phase 3.
+LIVE_VENUE = "binance_futures"
+
+# Pas de temps de la couche analyse technique. Mesuré sur 240 jours : en 5 m
+# le stop médian est de 21 bps et les frais mangent 48 % du risque même en
+# futures ; en 15 m le stop passe à 37 bps et les frais à 27 %.
+TIMEFRAME = "15m"
 
 BOT_ID   = "obi_walls"          # racine des fichiers state/ et trades/
 DATA_DIR = "data"               # data/<plateforme>/AAAA-MM-JJ/HH.csv.gz
 
 # ============================ COLLECTE =======================================
-FLUSH_EVERY  = 150              # lignes gardées en mémoire avant écriture
+# FLUSH_EVERY est calé sur la tranche de 10 min du collecteur (300 lignes à
+# 2 s) : chaque fichier est ainsi écrit en une fois puis figé, ce qui évite
+# que git ne stocke plusieurs versions complètes du même .gz.
+FLUSH_EVERY  = 300              # lignes gardées en mémoire avant écriture
 COMMIT_EVERY = 600              # secondes entre deux commits git
 
 # ============================ FEATURES =======================================
@@ -57,15 +83,20 @@ WALL_MIN_MULT     = 4.0         # taille >= 4x la médiane des niveaux de la ban
 WALL_MIN_NOTIONAL = 50_000.0    # ... et au moins 50 000 $ notionnel
 
 # ============================ STRATÉGIE ======================================
-# --- signal OBI ---
-OBI_BAND      = 10              # bande utilisée comme signal principal (bps)
+# --- le carnet CONFIRME, il ne décide pas ---
+# C'est la structure (invalidation du retracement) qui donne la direction et le
+# stop ; le carnet dit seulement quand appuyer sur la détente. D'où le fait
+# qu'un carnet peu profond suffise : l'OBI vit dans les 10 premiers bps.
+OBI_BAND      = 10              # bande utilisée comme confirmation (bps)
 OBI_EMA_SPAN  = 15              # lissage ~30 s à 2 s/snapshot
 # ATTENTION — seuil non validé. Sondage du carnet réel en séance calme :
-# OBI instantané ~ +0.01 sur la bande 10 bps, ~ +0.07 sur 50 bps. À 0.35 le bot
-# ne prendra que des déséquilibres francs, donc peu de trades. C'est LE premier
-# paramètre à balayer en phase 2 (`python backtest.py --sweep`).
-OBI_ENTRY     = 0.35            # |OBI lissé| requis pour armer un signal
+# OBI instantané ~ +0.01 sur la bande 10 bps. À 0.35 le bot n'entrera que sur
+# des déséquilibres francs. Premier paramètre à balayer en phase 2.
+OBI_ENTRY     = 0.35            # |OBI lissé| requis pour confirmer
 OBI_MIN_HOLD  = 10              # snapshots consécutifs au-dessus du seuil
+# Un mur adverse entre l'entrée et l'objectif bloque le chemin : inutile de
+# viser un TP derrière 3 M$ d'ordres passifs.
+BLOQUANT_MIN_NOTIONAL = 1_000_000.0
 
 # --- économie du trade : c'est ici que tout se joue ---
 # Les frais sont proportionnels au NOTIONNEL, le risque à la largeur du STOP.
@@ -74,12 +105,14 @@ OBI_MIN_HOLD  = 10              # snapshots consécutifs au-dessus du seuil
 # Un stop serré force un gros notionnel, donc des frais qui écrasent le R.
 # Mesuré : stop 75 bps sur Kraken → les frais valent 69 % du risque, et il
 # faudrait 56 % de winrate pour être à l'équilibre à RR 2 (contre 33 % sans
-# frais). D'où ce plafond, qui fixe mécaniquement la distance minimale du mur.
+# frais). D'où ce plafond. Le stop venant maintenant de la STRUCTURE et non du
+# carnet, on ne peut plus le choisir : ce plafond sert donc de FILTRE — un
+# setup dont l'invalidation est trop proche est écarté, pas élargi.
 MAX_FEE_FRACTION_OF_RISK = 0.35
 MIN_TP_MULT_FEES         = 2.0  # plancher supplémentaire sur le TP
 
 RR             = 2.0            # relevé de 1.5 à 2.0 : à ces frais, 1.5 ne paie plus
-SL_BUFFER_BPS  = 5.0            # stop placé juste derrière le mur
+SL_BUFFER_ATR  = 0.25           # stop posé au-delà de l'invalidation, en ATR
 MAX_SPREAD_BPS = 3.0            # au-delà, marché trop dégradé pour entrer
 COOLDOWN_SEC   = 600            # pause après une clôture de position
 MAX_HOLD_SEC   = 14400          # sortie forcée au bout de 4 h
@@ -98,8 +131,8 @@ TRADES_DIR = "trades"
 # Renseigné par use_venue() — ne pas écrire ces valeurs à la main.
 VENUE = EXCHANGE = SYMBOL = None
 BOOK_DEPTH = SNAPSHOT_INTERVAL = None
-FEE_PCT_PER_SIDE = FEE_ROUNDTRIP_BPS = MIN_TP_BPS = None
-WALL_MIN_DIST_BPS = WALL_MAX_DIST_BPS = WALL_BAND_BPS = None
+FEE_PCT_PER_SIDE = FEE_ROUNDTRIP_BPS = MIN_TP_BPS = MIN_STOP_BPS = None
+WALL_BAND_BPS = None
 
 
 def use_venue(name):
@@ -110,8 +143,8 @@ def use_venue(name):
     lit ces valeurs au niveau module.
     """
     global VENUE, EXCHANGE, SYMBOL, BOOK_DEPTH, SNAPSHOT_INTERVAL
-    global FEE_PCT_PER_SIDE, FEE_ROUNDTRIP_BPS, MIN_TP_BPS
-    global WALL_MIN_DIST_BPS, WALL_MAX_DIST_BPS, WALL_BAND_BPS
+    global FEE_PCT_PER_SIDE, FEE_ROUNDTRIP_BPS, MIN_TP_BPS, MIN_STOP_BPS
+    global WALL_BAND_BPS
 
     v = VENUES[name]
     VENUE, EXCHANGE, SYMBOL = name, v["exchange"], v["symbol"]
@@ -120,21 +153,15 @@ def use_venue(name):
     FEE_PCT_PER_SIDE  = v["fee_pct"]
     FEE_ROUNDTRIP_BPS = FEE_PCT_PER_SIDE * 100 * 2
 
-    # Distance minimale du mur : en-deçà, les frais dépassent la fraction
-    # tolérée du risque et le trade est perdant d'avance.
-    WALL_MIN_DIST_BPS = FEE_ROUNDTRIP_BPS / MAX_FEE_FRACTION_OF_RISK
-    # Distance maximale : ce que le carnet renvoyé permet réellement de voir.
-    WALL_MAX_DIST_BPS = v["span_bps"]
-    WALL_BAND_BPS     = v["span_bps"]
-    MIN_TP_BPS        = MIN_TP_MULT_FEES * FEE_ROUNDTRIP_BPS
-
-    if WALL_MIN_DIST_BPS >= WALL_MAX_DIST_BPS:
-        raise ValueError(
-            f"{name} : fenêtre de murs vide "
-            f"[{WALL_MIN_DIST_BPS:.0f}, {WALL_MAX_DIST_BPS:.0f}] bps. "
-            f"Les frais ({FEE_ROUNDTRIP_BPS:.0f} bps AR) exigent un stop plus "
-            f"large que ce que le carnet permet de voir. Augmenter `depth`, "
-            f"relever MAX_FEE_FRACTION_OF_RISK, ou changer de plateforme.")
+    # Stop minimal acceptable : en-deçà, les frais dépassent la fraction
+    # tolérée du risque et le trade est perdant d'avance. Sert de filtre sur
+    # les setups, le stop lui-même venant de la structure.
+    MIN_STOP_BPS  = FEE_ROUNDTRIP_BPS / MAX_FEE_FRACTION_OF_RISK
+    MIN_TP_BPS    = MIN_TP_MULT_FEES * FEE_ROUNDTRIP_BPS
+    # Bande de recherche des murs : tout ce que le carnet renvoie. Les murs ne
+    # servent plus d'ancrage au stop, seulement à repérer un blocage sur le
+    # chemin de l'objectif — un carnet court suffit donc.
+    WALL_BAND_BPS = v["span_bps"]
 
 
 use_venue(LIVE_VENUE)           # valeurs par défaut au chargement du module
