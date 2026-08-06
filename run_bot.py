@@ -67,8 +67,8 @@ def main():
     print(f"Bot {C.BOT_ID} demarre — {C.VENUE} {C.SYMBOL} — "
           f"capital {state['capital']:.2f}$ — "
           f"position {'ouverte ' + pos['side'] if pos else 'aucune'} — "
-          f"frais {C.FEE_ROUNDTRIP_BPS:.0f} bps AR, murs "
-          f"[{C.WALL_MIN_DIST_BPS:.0f}, {C.WALL_MAX_DIST_BPS:.0f}] bps", flush=True)
+          f"structure {C.TIMEFRAME} — frais {C.FEE_ROUNDTRIP_BPS:.0f} bps AR — "
+          f"stop min {C.MIN_STOP_BPS:.0f} bps", flush=True)
 
     while True:
         cycle_start = time.time()
