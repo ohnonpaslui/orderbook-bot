@@ -93,6 +93,17 @@ défaut (`binance_futures` et `kraken`), soit ~7 Mo/jour, ~100 Mo pour deux
 semaines. Binance spot est désactivée (`collect=False` dans `config.py`) : elle
 est dominée par les perpétuels côté frais sans rien apporter de plus.
 
+**Suivre la collecte** — à lancer de temps en temps pendant les deux semaines :
+
+```bash
+git pull && python status.py
+```
+
+Donne par plateforme la période couverte, la cadence réelle, le volume, et
+surtout les **trous**. Une session peut afficher des `OK` dans les logs tout en
+laissant des heures manquantes : c'est la couverture qui compte, pas l'étendue
+calendaire — 14 jours à moitié couverts ne font que 7 jours de données.
+
 > **Risque connu : Binance peut échouer sur GitHub Actions.** Les runners sont
 > sur des IP Azure américaines et Binance renvoie un HTTP 451 depuis les
 > États-Unis. Le collecteur est conçu pour ça : après 10 échecs consécutifs, la
@@ -147,6 +158,7 @@ features.py      carnet brut → OBI, profondeur, murs
 strategy.py      setup + confirmation carnet → signal
 paper_engine.py  signal → position, SL/TP, PnL en dollars réels
 collector.py     phase 1 : un thread par plateforme → data/
+status.py        diagnostic de la collecte (couverture, trous, cadence)
 backtest.py      phase 2 : data/ + bougies → statistiques
 run_bot.py       phase 3 : collecte + stratégie + paper trading
 tests/           trois suites, toutes rejouables hors ligne sauf le réseau
