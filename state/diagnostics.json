@@ -1,10 +1,10 @@
 {
-  "snapshots": 8736,
+  "snapshots": 8852,
   "signaux": 0,
   "rejets": {
     "warmup": 14,
     "cooldown": 0,
-    "pas de setup technique": 8722,
+    "pas de setup technique": 8838,
     "prix sorti de la zone": 0,
     "carnet ne confirme pas": 0,
     "confirmation trop breve": 0,
@@ -15,9 +15,9 @@
     "invalidation du mauvais cote": 0
   },
   "obi_hist": [
-    5069,
-    2784,
-    687,
+    5118,
+    2828,
+    710,
     85,
     20,
     17,
@@ -37,7 +37,7 @@
     0
   ],
   "obi_max": 0.8563,
-  "obi_ema": -0.0669,
+  "obi_ema": -0.0137,
   "obi_entry": 0.35,
   "setup": null,
   "venue": "kraken_futures",
@@ -51,6 +51,6 @@
   "erreur_structure": null,
   "raison_setup": "prix hors zone fibo",
   "premier_snapshot": 1786122838.28,
-  "dernier_snapshot": 1786140309.7,
-  "maj": "2026-08-07 22:05:11"
+  "dernier_snapshot": 1786140541.72,
+  "maj": "2026-08-07 22:09:02"
 }
