@@ -4,11 +4,11 @@ Ne remplace pas une execution, mais attrape les erreurs qui rendraient la
 page blanche (accolade manquante, id inexistant, fonction non definie).
 """
 import io
+import os
 import re
 
-import os
-SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                   "..", "docs", "index.html")
+RACINE = os.path.dirname(os.path.abspath(__file__))
+SRC = os.path.join(RACINE, "..", "docs", "index.html")
 t = io.open(SRC, encoding="utf-8").read()
 
 erreurs = []
@@ -119,10 +119,19 @@ for balise in ("div", "table", "tbody", "thead", "tr", "svg", "script", "style")
 print(f"\nbalises HTML : {'equilibrees' if not any('<' in e for e in erreurs) else 'PROBLEME'}")
 
 # --- 5. cles JSON attendues, cote python et cote js ---
-attendues = {"snapshots","signaux","rejets","obi_hist","obi_max","obi_entry",
-             "setup","venue","symbole","timeframe","mode","frais_ar_bps",
-             "stop_min_bps","obi_min_hold","rr","erreur_structure",
-             "raison_setup","maj","premier_snapshot","dernier_snapshot"}
+# Derivees du code source plutot qu'ecrites en dur : une liste figee se
+# desynchronise a la premiere cle ajoutee, et le controle devient un faux
+# positif qu'on finit par ignorer.
+def cles_produites(fichier, marqueur):
+    """Cles litterales d'un dict construit dans un fichier Python."""
+    src = io.open(os.path.join(RACINE, "..", fichier), encoding="utf-8").read()
+    bloc = src.split(marqueur, 1)[1] if marqueur in src else src
+    return set(re.findall(r'"(\w+)"\s*:', bloc))
+
+
+attendues = (cles_produites("strategy.py", "def diagnostic")
+             | cles_produites("diagnostics.py", "d.update"))
+print(f"\ncles produites par le code : {len(attendues)}")
 utilisees = set(re.findall(r"\bd(?:iag)?\.(\w+)", script))
 absentes = utilisees - attendues - {"setup","rejets"}
 print(f"\ncles du diagnostic utilisees : {len(utilisees)}")

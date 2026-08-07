@@ -239,28 +239,49 @@ function renduHisto(d){
   const h = d.obi_hist || [];
   const tot = h.reduce((s,n) => s+n, 0);
   if (!tot){ $("hist").innerHTML = `<span class="dim">Pas encore de mesure.</span>`; return; }
+  // La largeur de tranche vient du fichier : elle a déjà été affinée une fois
+  // (0.05 -> 0.02) et le pourra encore sans casser l'affichage.
+  const pas = d.obi_pas || 0.05;
   const max = Math.max(...h);
-  const seuilPct = Math.min(d.obi_entry / 1.0, 1) * 100;
+
+  // On ne dessine que la plage réellement occupée, plus une marge : au-delà
+  // les barres sont vides et écrasent visuellement le signal.
+  let dernier = 0;
+  h.forEach((n,i) => { if (n) dernier = i; });
+  const seuilIdx = d.obi_entry / pas;
+  const fin = Math.min(h.length, Math.max(dernier + 2, Math.ceil(seuilIdx) + 2));
+  const vus = h.slice(0, fin);
 
   $("hist").innerHTML =
-    h.map((n,i) => {
-      const borne = (i+1)*0.05;
+    vus.map((n,i) => {
+      const borne = (i+1)*pas;
       const over = borne > d.obi_entry;
       return `<div class="hbar ${over?"over":""}" style="height:${n/max*100}%"
-                   title="${(i*0.05).toFixed(2)}–${borne.toFixed(2)} : ${nf(n)} snapshots"></div>`;
+                   title="${(i*pas).toFixed(2)}–${borne.toFixed(2)} : ${nf(n)} snapshots"></div>`;
     }).join("")
-    + `<div class="seuil" style="left:${seuilPct}%" data-l="seuil ${d.obi_entry}"></div>`;
+    + (seuilIdx <= fin
+       ? `<div class="seuil" style="left:${seuilIdx/fin*100}%" data-l="seuil ${d.obi_entry}"></div>`
+       : "");
 
-  $("axis").innerHTML = h.map((_,i) =>
-    `<span>${i%4===0 ? (i*0.05).toFixed(2) : ""}</span>`).join("");
+  const tousLes = Math.max(1, Math.round(0.05/pas));
+  $("axis").innerHTML = vus.map((_,i) =>
+    `<span>${i%tousLes===0 ? (i*pas).toFixed(2) : ""}</span>`).join("");
 
-  const atteint = h.reduce((s,n,i) => (i+1)*0.05 > d.obi_entry ? s+n : s, 0);
-  $("obiHint").innerHTML = atteint === 0
+  const atteint = h.reduce((s,n,i) => (i+1)*pas > d.obi_entry ? s+n : s, 0);
+  let txt = atteint === 0
     ? `<b class="warn">Le seuil de ${d.obi_entry} n'a jamais été atteint sur
        ${nf(tot)} mesures</b> — dans cet état le bot ne peut pas se déclencher.
        Le maximum observé est ${Number(d.obi_max).toFixed(3)}.`
     : `Le seuil de ${d.obi_entry} a été franchi <b>${nf(atteint)} fois</b>
        sur ${nf(tot)} mesures (${(atteint/tot*100).toFixed(1)} %).`;
+
+  if (d.obi_seuils){
+    const l = Object.entries(d.obi_seuils)
+      .map(([s,n]) => `${s} → ${(n/tot*100).toFixed(1)} %`).join(" · ");
+    txt += `<br><span class="dim">Fréquence de franchissement selon le seuil :
+            ${l}</span>`;
+  }
+  $("obiHint").innerHTML = txt;
 }
 
 function renduSetup(d){

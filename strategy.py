@@ -54,9 +54,15 @@ class SetupBookStrategy:
         # Compteurs par filtre, et histogramme de l'OBI lissé. Sans eux on ne
         # peut pas savoir si OBI_ENTRY est atteignable : c'est la donnée qui
         # guide la calibration.
+        #
+        # Tranches de 0.02 et non 0.05 : mesuré en production sur 2 109
+        # snapshots, l'OBI lissé plafonne à 0.192 et 51 % des relevés tiennent
+        # dans la première tranche. À 0.05 tout s'écrasait sur quatre barres,
+        # trop grossier pour choisir un seuil.
         self.rejets   = {f: 0 for f in self.FILTRES}
         self.n_signal = 0
-        self.obi_hist = [0] * 20     # |obi_ema| par tranches de 0.05
+        self.obi_pas  = 0.02
+        self.obi_hist = [0] * 50     # |obi_ema| de 0 à 1.0
         self.obi_max  = 0.0
 
     # ---------------------------------------------------------------- état
@@ -94,7 +100,8 @@ class SetupBookStrategy:
 
         amplitude = abs(self.obi_ema)
         self.obi_max = max(self.obi_max, amplitude)
-        self.obi_hist[min(int(amplitude / 0.05), len(self.obi_hist) - 1)] += 1
+        self.obi_hist[min(int(amplitude / self.obi_pas),
+                          len(self.obi_hist) - 1)] += 1
 
         side = ("buy"  if self.obi_ema >=  C.OBI_ENTRY else
                 "sell" if self.obi_ema <= -C.OBI_ENTRY else None)
@@ -205,7 +212,16 @@ class SetupBookStrategy:
             "signaux":    self.n_signal,
             "rejets":     dict(self.rejets),
             "obi_hist":   list(self.obi_hist),
+            "obi_pas":    self.obi_pas,      # largeur d'une tranche
             "obi_max":    round(self.obi_max, 4),
+            # Combien de fois chaque seuil candidat aurait été franchi. C'est
+            # la table qui sert à choisir OBI_ENTRY, sans rien modifier en
+            # production ni attendre la phase 2.
+            "obi_seuils": {
+                f"{s:.2f}": sum(n for i, n in enumerate(self.obi_hist)
+                                if (i + 1) * self.obi_pas > s + 1e-9)
+                for s in (0.05, 0.08, 0.10, 0.12, 0.15, 0.20, 0.25, 0.35)
+            },
             "obi_ema":    round(self.obi_ema, 4) if self.obi_ema is not None else None,
             "obi_entry":  C.OBI_ENTRY,
             "setup": None if s is None else {
