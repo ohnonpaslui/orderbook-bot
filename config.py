@@ -27,9 +27,21 @@ VENUES = {
     # seuil de viabilité avec les stops que produit la méthode (27 % du risque
     # en 15 m — voir le tableau du README). API publique, aucun compte requis
     # pour collecter et faire du paper trading.
+    # PLATEFORME CIBLE. Perpétuel linéaire PF_XBTUSD, taker 0.05 % / maker
+    # 0.02 % — identique à Binance Futures, mais Kraken est une société
+    # américaine : ses endpoints ne géo-bloquent PAS les runners GitHub.
+    # C'est ce qui l'a fait choisir : Binance renvoie un HTTP 451 depuis les
+    # États-Unis, et collectait 0 snapshot en production (constaté le
+    # 2026-08-07). Carnet mesuré : 199 bids / 219 asks dans 50 bps, 28 M$.
+    "kraken_futures": dict(
+        exchange="krakenfutures", symbol="BTC/USD:USD",
+        depth=None, interval=2.0, fee_pct=0.05, span_bps=100.0, collect=True,
+    ),
+    # Fonctionne en local (Europe) mais renvoie 451 depuis GitHub Actions.
+    # Conservée pour comparaison manuelle, jamais collectée en production.
     "binance_futures": dict(
         exchange="binanceusdm", symbol="BTC/USDT:USDT",
-        depth=1000, interval=2.0, fee_pct=0.05, span_bps=18.0, collect=True,
+        depth=1000, interval=2.0, fee_pct=0.05, span_bps=18.0, collect=False,
     ),
     # Profondeur ramenée de 5000 à 1000 : les murs ne servent plus d'ancrage
     # au stop, seulement à détecter un blocage proche. 1000 niveaux couvrent
@@ -52,8 +64,9 @@ VENUES = {
 # par défaut : elle est dominée par les perpétuels côté frais (20 vs 10 bps)
 # sans rien apporter de plus. Passer `collect` à True pour la réactiver.
 
-# Plateforme utilisée par run_bot.py en phase 3.
-LIVE_VENUE = "binance_futures"
+# Plateforme utilisée par run_bot.py en phase 3, et observée à blanc pendant
+# la collecte.
+LIVE_VENUE = "kraken_futures"
 
 # Pas de temps de la couche analyse technique. Mesuré sur 240 jours : en 5 m
 # le stop médian est de 21 bps et les frais mangent 48 % du risque même en

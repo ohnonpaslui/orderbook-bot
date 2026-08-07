@@ -77,7 +77,10 @@ def main():
             break
 
         try:
-            book = ex.fetch_order_book(C.SYMBOL, limit=C.BOOK_DEPTH)
+            # Certaines plateformes (Kraken Futures) ignorent `limit` et
+            # renvoient tout le carnet : on omet le paramètre dans ce cas.
+            book = (ex.fetch_order_book(C.SYMBOL, limit=C.BOOK_DEPTH)
+                    if C.BOOK_DEPTH else ex.fetch_order_book(C.SYMBOL))
             row  = features.compute(book, cycle_start)
         except Exception as e:
             n_err += 1

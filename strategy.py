@@ -31,6 +31,15 @@ import technical as T
 
 class SetupBookStrategy:
 
+    # Ordre des filtres, du plus large au plus fin. Sert à afficher un
+    # entonnoir lisible : on veut savoir OÙ ça bloque, pas seulement que
+    # ça bloque.
+    FILTRES = ("warmup", "cooldown", "pas de setup technique",
+               "prix sorti de la zone", "carnet ne confirme pas",
+               "confirmation trop breve", "spread", "stop trop serre",
+               "TP sous les frais", "mur adverse sur le chemin",
+               "invalidation du mauvais cote")
+
     def __init__(self):
         self.obi_ema      = None
         self.n_updates    = 0
@@ -40,6 +49,15 @@ class SetupBookStrategy:
         self.setup        = None     # setup technique courant, ou None
         self.setup_ts     = 0.0
         self.last_reject  = None
+
+        # --- diagnostic ---
+        # Compteurs par filtre, et histogramme de l'OBI lissé. Sans eux on ne
+        # peut pas savoir si OBI_ENTRY est atteignable : c'est la donnée qui
+        # guide la calibration.
+        self.rejets   = {f: 0 for f in self.FILTRES}
+        self.n_signal = 0
+        self.obi_hist = [0] * 20     # |obi_ema| par tranches de 0.05
+        self.obi_max  = 0.0
 
     # ---------------------------------------------------------------- état
     def notify_close(self, ts):
@@ -73,6 +91,10 @@ class SetupBookStrategy:
         alpha = 2 / (C.OBI_EMA_SPAN + 1)
         self.obi_ema = obi if self.obi_ema is None else alpha * obi + (1 - alpha) * self.obi_ema
         self.n_updates += 1
+
+        amplitude = abs(self.obi_ema)
+        self.obi_max = max(self.obi_max, amplitude)
+        self.obi_hist[min(int(amplitude / 0.05), len(self.obi_hist) - 1)] += 1
 
         side = ("buy"  if self.obi_ema >=  C.OBI_ENTRY else
                 "sell" if self.obi_ema <= -C.OBI_ENTRY else None)
@@ -139,6 +161,7 @@ class SetupBookStrategy:
 
         self.streak, self.streak_side = 0, None      # pas de re-signal en boucle
         self.last_reject = None
+        self.n_signal += 1
         return {
             "side":      attendu,
             "entry":     round(entry, 2),
@@ -164,4 +187,33 @@ class SetupBookStrategy:
 
     def _reject(self, reason):
         self.last_reject = reason
+        # Les raisons chiffrées ("stop 12 bps < 29") sont regroupées sous leur
+        # famille, sinon l'entonnoir se disperse en centaines de lignes uniques.
+        cle = reason
+        if reason.startswith("stop "):
+            cle = "stop trop serre"
+        elif reason.startswith("TP "):
+            cle = "TP sous les frais"
+        self.rejets[cle] = self.rejets.get(cle, 0) + 1
         return None
+
+    def diagnostic(self):
+        """Instantané chiffré, destiné au dashboard et aux logs."""
+        s = self.setup
+        return {
+            "snapshots":  self.n_updates,
+            "signaux":    self.n_signal,
+            "rejets":     dict(self.rejets),
+            "obi_hist":   list(self.obi_hist),
+            "obi_max":    round(self.obi_max, 4),
+            "obi_ema":    round(self.obi_ema, 4) if self.obi_ema is not None else None,
+            "obi_entry":  C.OBI_ENTRY,
+            "setup": None if s is None else {
+                "sens":         "LONG" if s["direction"] > 0 else "SHORT",
+                "force":        s["force"],
+                "zone":         [round(s["zone"][0], 2), round(s["zone"][1], 2)],
+                "invalidation": round(s["invalidation"], 2),
+                "sr":           round(s["sr"]["prix"], 2),
+                "touches":      s["sr"]["touches"],
+            },
+        }

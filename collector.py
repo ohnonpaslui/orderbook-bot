@@ -34,6 +34,7 @@ import ccxt
 
 import config as C
 import features
+from diagnostics import Observateur
 
 MAX_RUNTIME = int(os.environ.get("MAX_RUNTIME", "0"))    # secondes ; 0 = infini
 GIT_PUSH    = os.environ.get("GIT_PUSH") == "1"
@@ -81,7 +82,7 @@ def flush(venue, buffer):
     buffer.clear()
 
 
-def git_commit(message, paths=(C.DATA_DIR,)):
+def git_commit(message, paths=(C.DATA_DIR, C.STATE_DIR)):
     try:
         present = [p for p in paths if os.path.isdir(p)]
         if not present:
@@ -121,8 +122,12 @@ class VenueCollector(threading.Thread):
         while not self.stop.is_set():
             t0 = time.time()
             try:
-                book = self.client.fetch_order_book(
-                    self.cfg["symbol"], limit=self.cfg["depth"])
+                # Kraken Futures ignore `limit` et renvoie tout le carnet :
+                # on omet le paramètre plutôt que d'envoyer une valeur fictive.
+                depth = self.cfg.get("depth")
+                book = (self.client.fetch_order_book(self.cfg["symbol"], limit=depth)
+                        if depth else
+                        self.client.fetch_order_book(self.cfg["symbol"]))
                 # La bande de murs est passée explicitement : `features` ne doit
                 # dépendre d'aucun global, plusieurs threads l'appellent.
                 row = features.compute(book, t0, self.cfg["span_bps"])
@@ -168,9 +173,24 @@ def main():
                        f"{C.VENUES[v]['depth']} niv.)" for v in actives)
     print(f"Collecteur demarre — {resume}", flush=True)
 
+    # La stratégie tourne à blanc sur la plateforme cible pendant toute la
+    # collecte : sans ça on enregistrerait deux semaines de carnet sans savoir
+    # si un seul setup se serait arme.
+    observateur = None
+    if C.LIVE_VENUE in workers:
+        observateur = Observateur(C.LIVE_VENUE)
+        observateur.rafraichir()
+        print(f"[diag] observation active sur {C.LIVE_VENUE} "
+              f"({C.TIMEFRAME}) — aucune position ne sera ouverte", flush=True)
+
     def drain():
         for v, w in workers.items():
-            flush(v, w.take_buffer())
+            rows = w.take_buffer()
+            if observateur and v == C.LIVE_VENUE:
+                observateur.consommer(rows)
+            flush(v, rows)
+        if observateur:
+            observateur.ecrire()
 
     last_commit = time.time()
     try:
@@ -192,6 +212,8 @@ def main():
                     f"{v}: {w.n_ok} OK / {w.n_err} err "
                     f"({ecoule / w.n_ok:.1f}s par snapshot)" if w.n_ok else
                     f"{v}: aucun snapshot" for v, w in workers.items()), flush=True)
+                if observateur:
+                    print("        " + observateur.resume(), flush=True)
     finally:
         stop.set()
         for w in workers.values():
