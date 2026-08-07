@@ -24,7 +24,7 @@ from strategy import SetupBookStrategy
 class Observateur:
     """Stratégie en lecture seule sur une plateforme, pour diagnostic."""
 
-    def __init__(self, venue):
+    def __init__(self, venue, chemin=None):
         self.venue   = venue
         self.strat   = SetupBookStrategy()
         self.debut   = time.time()
@@ -35,6 +35,48 @@ class Observateur:
         self.raison_setup = None
         self.premier_ts = None
         self.dernier_ts = None
+        self.chemin = chemin or os.path.join(C.STATE_DIR, "diagnostics.json")
+        self.cumul = self._charger()
+
+    # ------------------------------------------------------------ cumul
+    def _charger(self):
+        """
+        Reprend les compteurs de la session precedente.
+
+        Une session GitHub Actions dure 4 h 55 : sans cette reprise, les
+        compteurs repartiraient de zero cinq fois par jour et on ne verrait
+        jamais qu'une fenetre de cinq heures. Or la question posee — le seuil
+        d'OBI est-il atteignable — ne se tranche que sur plusieurs jours et
+        plusieurs regimes de marche.
+        """
+        vide = {"snapshots": 0, "signaux": 0, "rejets": {},
+                "obi_hist": [0] * len(self.strat.obi_hist), "obi_max": 0.0,
+                "depuis": None, "sessions": 0}
+        try:
+            with open(self.chemin, encoding="utf-8") as f:
+                d = json.load(f)
+        except (OSError, ValueError):
+            return vide
+
+        # La largeur de tranche a deja change une fois (0.05 -> 0.02) : melanger
+        # deux resolutions produirait un histogramme faux. On repart de zero.
+        if (d.get("obi_pas") != self.strat.obi_pas
+                or len(d.get("obi_hist") or []) != len(self.strat.obi_hist)):
+            print("[diag] resolution de l'histogramme modifiee — "
+                  "compteurs remis a zero", flush=True)
+            return vide
+
+        return {
+            "snapshots": int(d.get("snapshots", 0)),
+            "signaux":   int(d.get("signaux", 0)),
+            "rejets":    dict(d.get("rejets") or {}),
+            "obi_hist":  list(d["obi_hist"]),
+            "obi_max":   float(d.get("obi_max", 0.0)),
+            "depuis":    d.get("depuis") or d.get("maj"),
+            # Pas de +1 ici : c'est `ecrire` qui incremente, sinon la session
+            # serait comptee deux fois.
+            "sessions":  int(d.get("sessions", 0)),
+        }
 
     # ------------------------------------------------------------ structure
     def rafraichir(self):
@@ -64,10 +106,36 @@ class Observateur:
 
     # ------------------------------------------------------------- sortie
     def ecrire(self, chemin=None):
-        chemin = chemin or os.path.join(C.STATE_DIR, "diagnostics.json")
+        chemin = chemin or self.chemin
         os.makedirs(os.path.dirname(chemin) or ".", exist_ok=True)
 
-        d = self.strat.diagnostic()
+        session = self.strat.diagnostic()
+
+        # Les chiffres publies sont CUMULES depuis le debut de la campagne ;
+        # la session en cours reste consultable dans `session`.
+        c = self.cumul
+        d = dict(session)
+        d["snapshots"] = c["snapshots"] + session["snapshots"]
+        d["signaux"]   = c["signaux"]   + session["signaux"]
+        d["obi_max"]   = round(max(c["obi_max"], session["obi_max"]), 4)
+        d["obi_hist"]  = [a + b for a, b in zip(c["obi_hist"], session["obi_hist"])]
+        d["rejets"]    = dict(c["rejets"])
+        for k, v in session["rejets"].items():
+            d["rejets"][k] = d["rejets"].get(k, 0) + v
+
+        total = sum(d["obi_hist"]) or 1
+        d["obi_seuils"] = {
+            f"{s:.2f}": sum(n for i, n in enumerate(d["obi_hist"])
+                            if (i + 1) * self.strat.obi_pas > s + 1e-9)
+            for s in (0.05, 0.08, 0.10, 0.12, 0.15, 0.20, 0.25, 0.35)
+        }
+        d["session"] = {
+            "snapshots": session["snapshots"], "signaux": session["signaux"],
+            "obi_max": session["obi_max"],
+        }
+        d["sessions"] = c["sessions"] + 1
+        d["depuis"] = c["depuis"] or datetime.now(timezone.utc).strftime(
+            "%Y-%m-%d %H:%M:%S")
         d.update({
             "venue":        self.venue,
             "symbole":      C.VENUES[self.venue]["symbol"],
@@ -89,10 +157,17 @@ class Observateur:
 
     # -------------------------------------------------------------- resume
     def resume(self):
-        """Une ligne pour les logs du workflow."""
-        d = self.strat.diagnostic()
-        pire = max(d["rejets"].items(), key=lambda x: x[1], default=("—", 0))
-        setup = d["setup"]["sens"] if d["setup"] else "aucun"
-        return (f"[diag] {d['snapshots']:,} snapshots — setup {setup} — "
-                f"{d['signaux']} signal(aux) — OBI max {d['obi_max']:.2f} "
+        """Une ligne pour les logs du workflow, en chiffres cumules."""
+        s = self.strat.diagnostic()
+        cumul_snap = self.cumul["snapshots"] + s["snapshots"]
+        cumul_sig  = self.cumul["signaux"] + s["signaux"]
+        obi_max    = max(self.cumul["obi_max"], s["obi_max"])
+        rejets = dict(self.cumul["rejets"])
+        for k, v in s["rejets"].items():
+            rejets[k] = rejets.get(k, 0) + v
+        pire = max(rejets.items(), key=lambda x: x[1], default=("—", 0))
+        setup = s["setup"]["sens"] if s["setup"] else "aucun"
+        return (f"[diag] {cumul_snap:,} snapshots cumules "
+                f"({s['snapshots']:,} cette session) — setup {setup} — "
+                f"{cumul_sig} signal(aux) — OBI max {obi_max:.3f} "
                 f"(seuil {C.OBI_ENTRY}) — blocage principal : {pire[0]}")
