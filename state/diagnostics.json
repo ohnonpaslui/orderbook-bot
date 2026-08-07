@@ -1,10 +1,10 @@
 {
-  "snapshots": 2411,
+  "snapshots": 2713,
   "signaux": 0,
   "rejets": {
     "warmup": 14,
     "cooldown": 0,
-    "pas de setup technique": 2397,
+    "pas de setup technique": 2699,
     "prix sorti de la zone": 0,
     "carnet ne confirme pas": 0,
     "confirmation trop breve": 0,
@@ -15,8 +15,8 @@
     "invalidation du mauvais cote": 0
   },
   "obi_hist": [
-    1314,
-    727,
+    1591,
+    752,
     332,
     38,
     0,
@@ -37,7 +37,7 @@
     0
   ],
   "obi_max": 0.192,
-  "obi_ema": -0.0306,
+  "obi_ema": 0.0303,
   "obi_entry": 0.35,
   "setup": null,
   "venue": "kraken_futures",
@@ -51,6 +51,6 @@
   "erreur_structure": null,
   "raison_setup": "jambe contre-tendance",
   "premier_snapshot": 1786122838.28,
-  "dernier_snapshot": 1786127658.66,
-  "maj": "2026-08-07 18:34:21"
+  "dernier_snapshot": 1786128262.71,
+  "maj": "2026-08-07 18:44:23"
 }
