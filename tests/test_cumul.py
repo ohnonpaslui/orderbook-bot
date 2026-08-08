@@ -94,12 +94,27 @@ assert compte == sorted(compte, reverse=True), f"table non decroissante : {compt
 
 print("\n=== changement de resolution -> remise a zero ===")
 brut = json.load(open(CHEMIN, encoding="utf-8"))
-brut["obi_pas"] = 0.05
-brut["obi_hist"] = [0] * 20          # ancienne resolution
+brut["empreinte"] = brut["empreinte"].replace("pas0.02", "pas0.05")
 json.dump(brut, open(CHEMIN, "w", encoding="utf-8"))
 d4 = session(100, 0.10, 1_786_030_000.0)
 print(f"  cumul {d4['snapshots']:,} (attendu 100 : melange de resolutions evite)")
 assert d4["snapshots"] == 100, "un histogramme incompatible doit repartir de zero"
+
+# Le piege reel du 2026-08-08 : seul le SIGNAL change, la resolution reste
+# identique. Une garde qui ne regarde que les tranches laisse alors fusionner
+# deux distributions centrees sur des valeurs differentes.
+print("\n=== changement de SIGNAL a resolution identique -> remise a zero ===")
+d5 = session(150, 0.10, 1_786_040_000.0)
+print(f"  avant bascule : cumul {d5['snapshots']:,}")
+assert d5["snapshots"] == 250, "le cumul normal doit fonctionner"
+brut = json.load(open(CHEMIN, encoding="utf-8"))
+print(f"  empreinte enregistree : {brut['empreinte']}")
+brut["empreinte"] = brut["empreinte"].replace(C.CONFIRM_SIGNAL, "obi_10")
+json.dump(brut, open(CHEMIN, "w", encoding="utf-8"))
+d6 = session(120, 0.10, 1_786_050_000.0)
+print(f"  apres bascule : cumul {d6['snapshots']:,} (attendu 120)")
+assert d6["snapshots"] == 120, \
+    "un changement de signal doit remettre les compteurs a zero"
 
 shutil.rmtree(TMP, ignore_errors=True)
 print("\nTOUS LES TESTS CUMUL PASSENT")

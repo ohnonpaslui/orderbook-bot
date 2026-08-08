@@ -39,6 +39,19 @@ class Observateur:
         self.cumul = self._charger()
 
     # ------------------------------------------------------------ cumul
+    def empreinte(self):
+        """
+        Identifie la CONFIGURATION DE MESURE, pas seulement sa resolution.
+
+        Cumuler deux distributions incompatibles produit une table de seuils
+        fausse. C'est arrive le 2026-08-08 : le passage de l'OBI au microprice
+        a melange 10 356 mesures centrees sur 0.05 avec des mesures centrees
+        sur 0.5, parce que la garde ne regardait que la largeur des tranches.
+        Le lissage compte aussi — il change la forme de la distribution.
+        """
+        return (f"{C.CONFIRM_SIGNAL}/ema{C.CONFIRM_EMA_SPAN}"
+                f"/pas{self.strat.obi_pas}/n{len(self.strat.obi_hist)}")
+
     def _charger(self):
         """
         Reprend les compteurs de la session precedente.
@@ -46,7 +59,7 @@ class Observateur:
         Une session GitHub Actions dure 4 h 55 : sans cette reprise, les
         compteurs repartiraient de zero cinq fois par jour et on ne verrait
         jamais qu'une fenetre de cinq heures. Or la question posee — le seuil
-        d'OBI est-il atteignable — ne se tranche que sur plusieurs jours et
+        est-il atteignable — ne se tranche que sur plusieurs jours et
         plusieurs regimes de marche.
         """
         vide = {"snapshots": 0, "signaux": 0, "rejets": {},
@@ -58,12 +71,10 @@ class Observateur:
         except (OSError, ValueError):
             return vide
 
-        # La largeur de tranche a deja change une fois (0.05 -> 0.02) : melanger
-        # deux resolutions produirait un histogramme faux. On repart de zero.
-        if (d.get("obi_pas") != self.strat.obi_pas
-                or len(d.get("obi_hist") or []) != len(self.strat.obi_hist)):
-            print("[diag] resolution de l'histogramme modifiee — "
-                  "compteurs remis a zero", flush=True)
+        if d.get("empreinte") != self.empreinte():
+            print(f"[diag] configuration de mesure modifiee "
+                  f"({d.get('empreinte')} -> {self.empreinte()}) — "
+                  f"compteurs remis a zero", flush=True)
             return vide
 
         return {
@@ -145,6 +156,8 @@ class Observateur:
             "stop_min_bps": round(C.MIN_STOP_BPS, 1),
             "obi_min_hold": C.CONFIRM_MIN_HOLD,
             "signal": C.CONFIRM_SIGNAL,
+            "ema_span": C.CONFIRM_EMA_SPAN,
+            "empreinte": self.empreinte(),
             "rr":           C.RR,
             "erreur_structure": self.erreur_structure,
             "raison_setup":     self.raison_setup,
