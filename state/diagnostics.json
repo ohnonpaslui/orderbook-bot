@@ -1,12 +1,12 @@
 {
-  "snapshots": 3911,
+  "snapshots": 4212,
   "signaux": 0,
   "rejets": {
     "warmup": 14,
     "cooldown": 0,
     "pas de setup technique": 3471,
     "prix sorti de la zone": 170,
-    "carnet ne confirme pas": 256,
+    "carnet ne confirme pas": 557,
     "confirmation trop breve": 0,
     "spread": 0,
     "stop trop serre": 0,
@@ -15,11 +15,11 @@
     "invalidation du mauvais cote": 0
   },
   "obi_hist": [
-    1045,
-    1049,
-    673,
-    651,
-    345,
+    1091,
+    1136,
+    756,
+    699,
+    382,
     82,
     52,
     14,
@@ -69,8 +69,8 @@
   "obi_pas": 0.02,
   "obi_max": 0.1473,
   "obi_seuils": {
-    "0.05": 1817,
-    "0.08": 493,
+    "0.05": 1985,
+    "0.08": 530,
     "0.10": 148,
     "0.12": 66,
     "0.15": 14,
@@ -78,26 +78,26 @@
     "0.25": 0,
     "0.35": 0
   },
-  "obi_ema": 0.0081,
+  "obi_ema": 0.0358,
   "obi_entry": 0.35,
   "setup": {
     "sens": "LONG",
-    "force": 2,
+    "force": 1,
     "zone": [
       64893.95,
       64946.0
     ],
     "invalidation": 64855.0,
-    "sr": 64909.0,
-    "touches": 7
+    "sr": 64907.5,
+    "touches": 6
   },
   "session": {
-    "snapshots": 3911,
+    "snapshots": 4212,
     "signaux": 0,
     "obi_max": 0.1473
   },
   "sessions": 1,
-  "depuis": "2026-08-08 06:29:13",
+  "depuis": "2026-08-08 06:39:15",
   "venue": "kraken_futures",
   "symbole": "BTC/USD:USD",
   "timeframe": "15m",
@@ -109,6 +109,6 @@
   "erreur_structure": null,
   "raison_setup": null,
   "premier_snapshot": 1786162730.98,
-  "dernier_snapshot": 1786170551.59,
-  "maj": "2026-08-08 06:29:13"
+  "dernier_snapshot": 1786171153.63,
+  "maj": "2026-08-08 06:39:15"
 }
