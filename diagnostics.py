@@ -127,7 +127,7 @@ class Observateur:
         d["obi_seuils"] = {
             f"{s:.2f}": sum(n for i, n in enumerate(d["obi_hist"])
                             if (i + 1) * self.strat.obi_pas > s + 1e-9)
-            for s in (0.05, 0.08, 0.10, 0.12, 0.15, 0.20, 0.25, 0.35)
+            for s in (0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.75, 0.90)
         }
         d["session"] = {
             "snapshots": session["snapshots"], "signaux": session["signaux"],
@@ -143,7 +143,8 @@ class Observateur:
             "mode":         "observation",     # aucune position n'est ouverte
             "frais_ar_bps": C.FEE_ROUNDTRIP_BPS,
             "stop_min_bps": round(C.MIN_STOP_BPS, 1),
-            "obi_min_hold": C.OBI_MIN_HOLD,
+            "obi_min_hold": C.CONFIRM_MIN_HOLD,
+            "signal": C.CONFIRM_SIGNAL,
             "rr":           C.RR,
             "erreur_structure": self.erreur_structure,
             "raison_setup":     self.raison_setup,
@@ -170,4 +171,4 @@ class Observateur:
         return (f"[diag] {cumul_snap:,} snapshots cumules "
                 f"({s['snapshots']:,} cette session) — setup {setup} — "
                 f"{cumul_sig} signal(aux) — OBI max {obi_max:.3f} "
-                f"(seuil {C.OBI_ENTRY}) — blocage principal : {pire[0]}")
+                f"(seuil {C.CONFIRM_ENTRY}) — blocage principal : {pire[0]}")

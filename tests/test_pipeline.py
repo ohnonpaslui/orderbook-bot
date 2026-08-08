@@ -77,9 +77,12 @@ else:
 
 
 def ligne(ts, mid, obi):
+    # Le microprice porte desormais le signal de confirmation : normalise par
+    # la demi-fourchette (0.5 ici), un decalage de 0.5*obi donne mpi = obi.
     r = {"ts": round(ts, 2), "best_bid": round(mid - 0.5, 2),
          "best_ask": round(mid + 0.5, 2), "mid": round(mid, 2),
-         "microprice": round(mid, 4), "spread_bps": round(1.0 / mid * 10_000, 3)}
+         "microprice": round(mid + obi * 0.5, 4),
+         "spread_bps": round(1.0 / mid * 10_000, 3)}
     for bande in C.DEPTH_BANDS_BPS:
         r[f"bid_{bande}"] = 1_000_000.0
         r[f"ask_{bande}"] = 1_000_000.0

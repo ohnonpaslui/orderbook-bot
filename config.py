@@ -98,15 +98,33 @@ WALL_MIN_NOTIONAL = 50_000.0    # ... et au moins 50 000 $ notionnel
 # ============================ STRATÉGIE ======================================
 # --- le carnet CONFIRME, il ne décide pas ---
 # C'est la structure (invalidation du retracement) qui donne la direction et le
-# stop ; le carnet dit seulement quand appuyer sur la détente. D'où le fait
-# qu'un carnet peu profond suffise : l'OBI vit dans les 10 premiers bps.
-OBI_BAND      = 10              # bande utilisée comme confirmation (bps)
-OBI_EMA_SPAN  = 15              # lissage ~30 s à 2 s/snapshot
-# ATTENTION — seuil non validé. Sondage du carnet réel en séance calme :
-# OBI instantané ~ +0.01 sur la bande 10 bps. À 0.35 le bot n'entrera que sur
-# des déséquilibres francs. Premier paramètre à balayer en phase 2.
-OBI_ENTRY     = 0.35            # |OBI lissé| requis pour confirmer
-OBI_MIN_HOLD  = 10              # snapshots consécutifs au-dessus du seuil
+# stop ; le carnet dit seulement quand appuyer sur la détente.
+#
+# CHOIX DU SIGNAL — mesuré sur 18 907 snapshots réels (21,5 h, kraken_futures),
+# par corrélation avec la variation de prix qui suit. Bruit statistique ±0.007 :
+#
+#   signal                    30 s     2 min    part du temps au-dessus du seuil
+#   microprice normalisé     +0.121   +0.111    ~50 %   <- retenu
+#   obi 5 bps                +0.046   +0.070    ~10 %
+#   obi 10 bps               +0.049   +0.060     0.3 %  <- ancien choix
+#   obi 50 bps               +0.022   +0.006    CONTRARIAN (-0.063 à 15 min)
+#
+# Trois enseignements contre-intuitifs : le microprice bat l'OBI d'un facteur
+# deux, la bande large est activement nuisible (les gros ordres passifs
+# éloignés se font absorber au lieu de pousser le prix), et le lissage DÉGRADE
+# le signal — d'où un EMA très court.
+#
+# L'ancien réglage (obi 10 bps, seuil 0.35, lissage 30 s) ne franchissait son
+# seuil que 0.28 % du temps : une confirmation soutenue sur 10 snapshots y
+# était quasi impossible, ce qui explique les zéro signal des deux premiers
+# jours.
+CONFIRM_SIGNAL   = "mpi"        # "mpi" | "obi_5" | "obi_10" | "obi_25" | "obi_50"
+CONFIRM_EMA_SPAN = 3            # lissage court : ~6 s à 2 s/snapshot
+CONFIRM_ENTRY    = 0.50         # |signal lissé| requis pour confirmer
+CONFIRM_MIN_HOLD = 10           # snapshots consécutifs au-dessus du seuil
+# Avec ces valeurs : 204 épisodes de confirmation soutenue sur 21,5 h,
+# soit ~10 par heure. À calibrer en phase 2, mais l'ordre de grandeur permet
+# enfin au bot de se déclencher.
 # Un mur adverse entre l'entrée et l'objectif bloque le chemin : inutile de
 # viser un TP derrière 3 M$ d'ordres passifs.
 BLOQUANT_MIN_NOTIONAL = 1_000_000.0

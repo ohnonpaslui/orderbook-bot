@@ -104,7 +104,7 @@
 
 <!-- ============ OBI ============ -->
 <div class="panel">
-  <h2>Distribution du déséquilibre du carnet (OBI lissé)</h2>
+  <h2 id="obiTitre">Distribution du signal de confirmation</h2>
   <p class="hint" id="obiHint">Répartition de la pression acheteur/vendeur
     mesurée. Le trait rouge est le seuil d'entrée exigé : si aucune barre ne le
     dépasse, le seuil est trop haut et le bot ne se déclenchera jamais.</p>
@@ -266,6 +266,16 @@ function renduHisto(d){
   const tousLes = Math.max(1, Math.round(0.05/pas));
   $("axis").innerHTML = vus.map((_,i) =>
     `<span>${i%tousLes===0 ? (i*pas).toFixed(2) : ""}</span>`).join("");
+
+  // Le signal de confirmation est configurable (microprice normalisé ou OBI
+  // sur l'une des bandes) : le titre suit ce que le bot utilise réellement.
+  const NOMS = {
+    mpi: "microprice normalisé", obi_5: "OBI 5 bps", obi_10: "OBI 10 bps",
+    obi_25: "OBI 25 bps", obi_50: "OBI 50 bps",
+  };
+  if (d.signal && $("obiTitre"))
+    $("obiTitre").textContent =
+      "Distribution du signal de confirmation — " + (NOMS[d.signal] || d.signal);
 
   const atteint = h.reduce((s,n,i) => (i+1)*pas > d.obi_entry ? s+n : s, 0);
   let txt = atteint === 0

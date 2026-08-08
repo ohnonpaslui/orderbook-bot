@@ -27,8 +27,10 @@ CHEMIN = os.path.join(TMP, "diagnostics.json")
 
 
 def ligne(ts, obi, mid=65000.0):
+    # Le signal de confirmation est porte par le microprice, normalise par la
+    # demi-fourchette (0.5 ici) : un decalage de 0.5*obi donne un signal = obi.
     r = {"ts": ts, "best_bid": mid - 0.5, "best_ask": mid + 0.5, "mid": mid,
-         "microprice": mid, "spread_bps": 0.15}
+         "microprice": mid + obi * 0.5, "spread_bps": 0.15}
     for b in C.DEPTH_BANDS_BPS:
         r[f"bid_{b}"] = 1e6
         r[f"ask_{b}"] = 1e6
@@ -81,9 +83,14 @@ assert d3["obi_max"] >= d2["obi_max"], "le maximum ne doit jamais reculer"
 
 print("\n=== table des seuils ===")
 tot = sum(d3["obi_hist"])
-for s, n in sorted(d3["obi_seuils"].items()):
+paires = sorted(d3["obi_seuils"].items(), key=lambda x: float(x[0]))
+for s, n in paires:
     print(f"  {s} -> {n:>5,} / {tot:,} ({n/tot*100:>5.1f} %)")
-assert d3["obi_seuils"]["0.05"] >= d3["obi_seuils"]["0.35"], "table incoherente"
+# Les seuils eux-memes suivent l'echelle du signal configure : on verifie la
+# propriete, pas des valeurs figees. Un seuil plus haut ne peut pas etre
+# franchi plus souvent qu'un seuil plus bas.
+compte = [n for _, n in paires]
+assert compte == sorted(compte, reverse=True), f"table non decroissante : {compte}"
 
 print("\n=== changement de resolution -> remise a zero ===")
 brut = json.load(open(CHEMIN, encoding="utf-8"))

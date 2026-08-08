@@ -52,7 +52,7 @@ class SetupBookStrategy:
 
         # --- diagnostic ---
         # Compteurs par filtre, et histogramme de l'OBI lissé. Sans eux on ne
-        # peut pas savoir si OBI_ENTRY est atteignable : c'est la donnée qui
+        # peut pas savoir si CONFIRM_ENTRY est atteignable : c'est la donnée qui
         # guide la calibration.
         #
         # Tranches de 0.02 et non 0.05 : mesuré en production sur 2 109
@@ -87,14 +87,32 @@ class SetupBookStrategy:
         return raison
 
     # ------------------------------------------------------------- signal
+    @staticmethod
+    def valeur_confirmation(row):
+        """
+        Valeur brute du signal de confirmation, bornée dans [-1, +1].
+
+        Le microprice est en dollars : normalisé par la demi-fourchette il
+        devient comparable à un OBI, ce qui garde les seuils lisibles et le
+        balayage de la phase 2 homogène entre les deux familles de signaux.
+        Le microprice étant toujours compris entre le meilleur bid et le
+        meilleur ask, le rapport tient naturellement dans [-1, +1].
+        """
+        if C.CONFIRM_SIGNAL != "mpi":
+            return row[C.CONFIRM_SIGNAL]
+        demi = (row["best_ask"] - row["best_bid"]) / 2
+        if demi <= 0:
+            return 0.0
+        return max(-1.0, min(1.0, (row["microprice"] - row["mid"]) / demi))
+
     def update(self, row):
         """
         Consomme un snapshot de carnet et retourne un signal dict ou None.
         Doit être appelé sur CHAQUE snapshot, même position ouverte, pour que
-        l'EMA de l'OBI reste continue.
+        le lissage du signal reste continu.
         """
-        obi = row[f"obi_{C.OBI_BAND}"]
-        alpha = 2 / (C.OBI_EMA_SPAN + 1)
+        obi = self.valeur_confirmation(row)
+        alpha = 2 / (C.CONFIRM_EMA_SPAN + 1)
         self.obi_ema = obi if self.obi_ema is None else alpha * obi + (1 - alpha) * self.obi_ema
         self.n_updates += 1
 
@@ -103,8 +121,8 @@ class SetupBookStrategy:
         self.obi_hist[min(int(amplitude / self.obi_pas),
                           len(self.obi_hist) - 1)] += 1
 
-        side = ("buy"  if self.obi_ema >=  C.OBI_ENTRY else
-                "sell" if self.obi_ema <= -C.OBI_ENTRY else None)
+        side = ("buy"  if self.obi_ema >=  C.CONFIRM_ENTRY else
+                "sell" if self.obi_ema <= -C.CONFIRM_ENTRY else None)
         if side and side == self.streak_side:
             self.streak += 1
         elif side:
@@ -112,7 +130,7 @@ class SetupBookStrategy:
         else:
             self.streak, self.streak_side = 0, None
 
-        if self.n_updates < C.OBI_EMA_SPAN:
+        if self.n_updates < C.CONFIRM_EMA_SPAN:
             return self._reject("warmup")
         if row["ts"] < self.cooldown_til:
             return self._reject("cooldown")
@@ -131,7 +149,7 @@ class SetupBookStrategy:
         # --- 2. le carnet doit confirmer dans le sens du setup ---
         if side != attendu:
             return self._reject("carnet ne confirme pas")
-        if self.streak < C.OBI_MIN_HOLD:
+        if self.streak < C.CONFIRM_MIN_HOLD:
             return self._reject("confirmation trop breve")
         if row["spread_bps"] > C.MAX_SPREAD_BPS:
             return self._reject("spread")
@@ -215,15 +233,15 @@ class SetupBookStrategy:
             "obi_pas":    self.obi_pas,      # largeur d'une tranche
             "obi_max":    round(self.obi_max, 4),
             # Combien de fois chaque seuil candidat aurait été franchi. C'est
-            # la table qui sert à choisir OBI_ENTRY, sans rien modifier en
+            # la table qui sert à choisir CONFIRM_ENTRY, sans rien modifier en
             # production ni attendre la phase 2.
             "obi_seuils": {
                 f"{s:.2f}": sum(n for i, n in enumerate(self.obi_hist)
                                 if (i + 1) * self.obi_pas > s + 1e-9)
-                for s in (0.05, 0.08, 0.10, 0.12, 0.15, 0.20, 0.25, 0.35)
+                for s in (0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.75, 0.90)
             },
             "obi_ema":    round(self.obi_ema, 4) if self.obi_ema is not None else None,
-            "obi_entry":  C.OBI_ENTRY,
+            "obi_entry":  C.CONFIRM_ENTRY,
             "setup": None if s is None else {
                 "sens":         "LONG" if s["direction"] > 0 else "SHORT",
                 "force":        s["force"],

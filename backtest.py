@@ -8,7 +8,7 @@ divergent un jour, ce sera une différence de données, jamais de logique.
 Usage :
   python backtest.py                       # config.py telle quelle
   python backtest.py --from 2026-08-06     # sur une plage de dates
-  python backtest.py --set OBI_ENTRY=0.45 --set RR=2.5
+  python backtest.py --set CONFIRM_ENTRY=0.6 --set RR=2.5
   python backtest.py --sweep               # balayage des seuils principaux
 """
 
@@ -222,14 +222,14 @@ def main():
         # Bougies chargées une seule fois : le balayage ne change que les
         # seuils de confirmation, pas la structure.
         bougies = charger_bougies(args.venue, rows)
-        grid = list(itertools.product((0.15, 0.25, 0.35, 0.45),   # OBI_ENTRY
-                                      (5, 10, 20),                # OBI_MIN_HOLD
+        grid = list(itertools.product((0.30, 0.40, 0.50, 0.65),   # CONFIRM_ENTRY
+                                      (5, 10, 20),                # CONFIRM_MIN_HOLD
                                       (1.5, 2.0, 3.0)))           # RR
         print(f"{'OBI':>5} {'HOLD':>5} {'RR':>4} │ {'trades':>6} {'win%':>6} "
               f"{'PnL$':>9} {'PF':>6} {'DD%':>6} {'avgR':>6}")
         print("─" * 66)
         for obi, hold, rr in grid:
-            C.OBI_ENTRY, C.OBI_MIN_HOLD, C.RR = obi, hold, rr
+            C.CONFIRM_ENTRY, C.CONFIRM_MIN_HOLD, C.RR = obi, hold, rr
             s, _ = run(rows, bougies=bougies)
             if not s["trades"]:
                 print(f"{obi:>5} {hold:>5} {rr:>4} │ {'aucun trade':>6}")
