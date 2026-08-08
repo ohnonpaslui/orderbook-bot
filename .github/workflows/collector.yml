@@ -8,7 +8,10 @@ name: Collecte carnet
 
 on:
   schedule:
-    - cron: "0 */5 * * *"       # nouvelle session toutes les 5 heures
+    # Toutes les 2 heures, alors que la session dure 4 h 55 : combine a
+    # cancel-in-progress, une panne est donc rattrapee en 2 heures au pire
+    # au lieu de 5. La relance ne coute rien, les donnees sont deja commitees.
+    - cron: "0 */2 * * *"
   workflow_dispatch:
 
 permissions:
@@ -16,7 +19,12 @@ permissions:
 
 concurrency:
   group: orderbook-data         # jamais deux ecrivains sur data/ en parallele
-  cancel-in-progress: false
+  # true, et non false : une session bloquee retenait le groupe indefiniment
+  # et TOUT s'empilait derriere elle (constate le 2026-08-08 : 4 h 40 sans
+  # collecte, run #7 en attente d'un run #6 fige). Avec true, la session
+  # suivante reprend la main. Le cout est nul : les donnees sont commitees
+  # toutes les 10 minutes, une session interrompue ne perd que son tampon.
+  cancel-in-progress: true
 
 jobs:
   collect:

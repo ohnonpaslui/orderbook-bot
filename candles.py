@@ -71,12 +71,30 @@ def fetch(venue, timeframe=CACHE_TF, days=90, use_cache=True, verbose=True):
     connu = {int(r["ts"]) for r in rows}
     since = max(int(rows[-1]["ts"]) + tf_ms, debut) if rows else debut
 
+    # Les tentatives sont BORNEES. Une boucle infinie ici a deja bloque une
+    # session entiere en production (run #6 du 2026-08-08) : les threads de
+    # collecte continuaient a remplir la memoire pendant que le thread
+    # principal reessayait sans fin, donc plus aucun commit pendant 5 heures.
+    # Mieux vaut remonter l'erreur : l'appelant garde le dernier setup connu
+    # et reessaiera au prochain cycle.
+    MAX_ESSAIS = 4
+    essais = 0
+
     while since < now_ms:
         try:
             lot = ex.fetch_ohlcv(v["symbol"], timeframe, since=since, limit=720)
+            essais = 0
         except Exception as e:
-            print(f"[candles] {type(e).__name__}: {str(e)[:120]} — nouvel essai", flush=True)
-            time.sleep(5)
+            essais += 1
+            print(f"[candles] {type(e).__name__}: {str(e)[:120]} "
+                  f"(essai {essais}/{MAX_ESSAIS})", flush=True)
+            if essais >= MAX_ESSAIS:
+                if rows:
+                    print("[candles] abandon — on garde l'historique deja en cache",
+                          flush=True)
+                    break
+                raise
+            time.sleep(3 * essais)
             continue
         if not lot:
             break
