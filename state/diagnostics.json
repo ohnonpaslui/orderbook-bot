@@ -1,10 +1,10 @@
 {
-  "snapshots": 9453,
+  "snapshots": 9754,
   "signaux": 0,
   "rejets": {
     "warmup": 28,
     "cooldown": 0,
-    "pas de setup technique": 7176,
+    "pas de setup technique": 7477,
     "prix sorti de la zone": 250,
     "carnet ne confirme pas": 1999,
     "confirmation trop breve": 0,
@@ -15,17 +15,17 @@
     "invalidation du mauvais cote": 0
   },
   "obi_hist": [
-    3022,
-    2405,
-    1750,
-    1262,
-    723,
-    201,
-    65,
-    22,
-    3,
-    0,
-    0,
+    3043,
+    2427,
+    1773,
+    1331,
+    774,
+    243,
+    107,
+    37,
+    8,
+    4,
+    7,
     0,
     0,
     0,
@@ -67,24 +67,24 @@
     0
   ],
   "obi_pas": 0.02,
-  "obi_max": 0.1716,
+  "obi_max": 0.2162,
   "obi_seuils": {
-    "0.05": 4026,
-    "0.08": 1014,
-    "0.10": 291,
-    "0.12": 90,
-    "0.15": 25,
-    "0.20": 0,
+    "0.05": 4284,
+    "0.08": 1180,
+    "0.10": 406,
+    "0.12": 163,
+    "0.15": 56,
+    "0.20": 7,
     "0.25": 0,
     "0.35": 0
   },
-  "obi_ema": 0.0764,
+  "obi_ema": 0.0668,
   "obi_entry": 0.35,
   "setup": null,
   "session": {
-    "snapshots": 603,
+    "snapshots": 904,
     "signaux": 0,
-    "obi_max": 0.1216
+    "obi_max": 0.2162
   },
   "sessions": 2,
   "depuis": "2026-08-08 09:13:51",
@@ -99,6 +99,6 @@
   "erreur_structure": null,
   "raison_setup": "prix hors zone fibo",
   "premier_snapshot": 1786197908.87,
-  "dernier_snapshot": 1786199112.96,
-  "maj": "2026-08-08 14:25:14"
+  "dernier_snapshot": 1786199715.01,
+  "maj": "2026-08-08 14:35:16"
 }
