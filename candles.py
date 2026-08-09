@@ -10,8 +10,10 @@ Cache : data/<plateforme>/candles_<tf>.csv, complété de façon incrémentale.
 """
 
 import csv
+import json
 import os
 import time
+import urllib.request
 
 import ccxt
 
@@ -25,6 +27,57 @@ COLUMNS  = ["ts", "open", "high", "low", "close", "volume"]
 
 def cache_path(venue, timeframe=CACHE_TF):
     return os.path.join(C.DATA_DIR, venue, f"candles_{timeframe}.csv")
+
+
+# ----------------------------- Source Yahoo -----------------------------------
+# Les bougies de futures ne sont pas accessibles via ccxt. Yahoo en publie
+# gratuitement, ce qui permet de tester une stratégie sur NQ ou ES avant de
+# payer quoi que ce soit — la licence CME pour le carnet en API coûte 290 $/mois,
+# et rien ne justifie cette dépense tant qu'aucun avantage n'est démontré.
+#
+# Profondeurs disponibles (mesurées) : 1h -> 873 jours, 15m et 5m -> 60 jours,
+# 1m -> 7 jours, 1d -> 10 ans.
+YAHOO = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}"
+YAHOO_MAX = {"1m": "7d", "5m": "60d", "15m": "60d", "30m": "60d",
+             "1h": "730d", "1d": "10y"}
+
+
+def fetch_yahoo(symbole, timeframe="1h", periode=None, verbose=True):
+    """
+    Bougies OHLCV depuis Yahoo, au même format que `fetch`.
+
+    `symbole` suit la nomenclature Yahoo : NQ=F (Nasdaq futures), ES=F (S&P),
+    MNQ=F (micro), QQQ (ETF), ^NDX (indice).
+    """
+    import urllib.parse
+    periode = periode or YAHOO_MAX.get(timeframe, "730d")
+    url = (f"{YAHOO.format(sym=urllib.parse.quote(symbole))}"
+           f"?interval={timeframe}&range={periode}")
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        d = json.load(r)
+
+    res = (d.get("chart") or {}).get("result")
+    if not res:
+        raise RuntimeError(f"Yahoo n'a rien renvoyé pour {symbole} "
+                           f"({(d.get('chart') or {}).get('error')})")
+    r0 = res[0]
+    ts = r0.get("timestamp") or []
+    q = r0["indicators"]["quote"][0]
+
+    rows = []
+    for i, t in enumerate(ts):
+        o, h, l, c = (q["open"][i], q["high"][i], q["low"][i], q["close"][i])
+        if None in (o, h, l, c):
+            continue                      # bougie creuse (jour ferié, halte)
+        rows.append({"ts": float(t) * 1000, "open": o, "high": h, "low": l,
+                     "close": c, "volume": (q.get("volume") or [0])[i] or 0.0})
+    rows.sort(key=lambda x: x["ts"])
+    if verbose:
+        print(f"[yahoo] {len(rows):,} bougies {timeframe} pour {symbole}",
+              flush=True)
+    return rows
 
 
 def load_cache(venue, timeframe=CACHE_TF):

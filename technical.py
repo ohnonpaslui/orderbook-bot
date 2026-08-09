@@ -22,6 +22,7 @@ simple "acheter le retracement".
 Le carnet d'ordres n'intervient qu'après, pour le déclenchement.
 """
 
+from datetime import datetime, timezone
 from statistics import median
 
 # ----------------------------- Paramètres ------------------------------------
@@ -59,6 +60,27 @@ BOUGIES_REQUISES = MM_LONG + SR_LOOKBACK + PIVOT_N + 10
 FIB_NIVEAUX  = (0.382, 0.5, 0.618, 0.786)
 FIB_ZONE     = (0.5, 0.786)   # zone d'intérêt : le "golden pocket" élargi
 FIB_MIN_LEG_ATR = 3.0         # une jambe sous 3 ATR n'est pas une impulsion
+
+# --- Qualité de l'impulsion et contexte ---------------------------------------
+# Ces filtres sont désactivés par défaut : ils préservent le comportement
+# d'origine. Ils existent pour être balayés (explore_structure.py), parce que
+# le diagnostic MFE/MAE a montré que le problème est dans la DÉFINITION de
+# l'entrée, pas dans sa gestion.
+#
+# LEG_MAX_BARRES : une impulsion est rapide. Deux pivots opposés distants de
+#   200 bougies décrivent une dérive, pas un mouvement directionnel — mais le
+#   code d'origine les traitait pareil.
+# VOL_MIN_RATIO : volume moyen de la jambe rapporté au volume médian récent.
+#   Une vraie impulsion se fait sur du volume. Non utilisé jusqu'ici, alors que
+#   la méthode cite le volume dans ses fondamentaux.
+# FORCE_MIN : 2 exige l'empilement complet prix > MM20 > MM50 > MM200.
+# EXIGER_SR : la confluence avec un support/résistance est-elle obligatoire.
+# HEURES_UTC : plage horaire autorisée, pour tester un effet de séance.
+LEG_MAX_BARRES = None         # None = pas de limite
+VOL_MIN_RATIO  = None         # None = pas de filtre de volume
+FORCE_MIN      = 1
+EXIGER_SR      = True
+HEURES_UTC     = None         # None ou (debut, fin) en heures UTC
 
 
 # ============================ 1. INDICATEURS =================================
@@ -260,10 +282,32 @@ def derniere_jambe(candles, i):
 
     # Le pivot le plus récent est l'arrivée de la jambe.
     if j_bas < j_haut:
-        return {"sens": 1, "depart": prix_bas, "arrivee": prix_haut,
-                "amplitude": amplitude}
-    return {"sens": -1, "depart": prix_haut, "arrivee": prix_bas,
-            "amplitude": amplitude}
+        jambe = {"sens": 1, "depart": prix_bas, "arrivee": prix_haut,
+                 "amplitude": amplitude, "i0": j_bas, "i1": j_haut}
+    else:
+        jambe = {"sens": -1, "depart": prix_haut, "arrivee": prix_bas,
+                 "amplitude": amplitude, "i0": j_haut, "i1": j_bas}
+
+    duree = jambe["i1"] - jambe["i0"]
+    jambe["duree"] = duree
+    if LEG_MAX_BARRES is not None and duree > LEG_MAX_BARRES:
+        return None                    # dérive lente, pas une impulsion
+
+    # Volume de la jambe rapporté au volume médian récent. Une impulsion se
+    # fait sur du volume ; une dérive sur du vide.
+    if duree > 0:
+        vols = [candles[k].get("volume", 0.0)
+                for k in range(jambe["i0"], jambe["i1"] + 1)]
+        ref_debut = max(0, jambe["i0"] - 100)
+        ref = [candles[k].get("volume", 0.0) for k in range(ref_debut, jambe["i0"])]
+        med = median(ref) if ref else 0.0
+        jambe["vol_ratio"] = (sum(vols) / len(vols) / med) if med > 0 else 0.0
+    else:
+        jambe["vol_ratio"] = 0.0
+    if VOL_MIN_RATIO is not None and jambe["vol_ratio"] < VOL_MIN_RATIO:
+        return None
+
+    return jambe
 
 
 def fib_niveaux(jambe):
@@ -289,8 +333,14 @@ def setup(candles, i):
     silence inexploitable.
     """
     c = candles[i]
+
+    if HEURES_UTC is not None:
+        h = datetime.fromtimestamp(c["ts"] / 1000, timezone.utc).hour
+        if not (HEURES_UTC[0] <= h < HEURES_UTC[1]):
+            return None, "hors plage horaire"
+
     dir_tendance, force = trend(c)
-    if dir_tendance == 0:
+    if dir_tendance == 0 or force < FORCE_MIN:
         return None, "pas de tendance"
 
     jambe = derniere_jambe(candles, i)
@@ -305,11 +355,15 @@ def setup(candles, i):
         return None, "prix hors zone fibo"
 
     # Confluence : la zone Fibonacci doit recouvrir un S/R historique.
-    zones = sr_zones(candles, i)
     milieu = (bas + haut) / 2
-    sr = zone_proche(zones, milieu, (haut - bas) / 2 + (c["atr"] or 0) * 0.5)
-    if sr is None:
-        return None, "pas de confluence S/R"
+    sr = None
+    if EXIGER_SR:
+        zones = sr_zones(candles, i)
+        sr = zone_proche(zones, milieu, (haut - bas) / 2 + (c["atr"] or 0) * 0.5)
+        if sr is None:
+            return None, "pas de confluence S/R"
+    else:
+        sr = {"prix": milieu, "touches": 0, "type": "ignore"}
 
     # Invalidation structurelle : au-delà du départ de la jambe, le scénario
     # de retracement est mort. C'est un stop large — et c'est exactement ce
