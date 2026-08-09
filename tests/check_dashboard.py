@@ -8,7 +8,10 @@ import os
 import re
 
 RACINE = os.path.dirname(os.path.abspath(__file__))
-SRC = os.path.join(RACINE, "..", "docs", "index.html")
+import sys
+# Accepte un chemin en argument : le depot contient plusieurs pages.
+SRC = (sys.argv[1] if len(sys.argv) > 1
+       else os.path.join(RACINE, "..", "docs", "index.html"))
 t = io.open(SRC, encoding="utf-8").read()
 
 erreurs = []

@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Carnet d'ordres en temps réel</title>
+<style>
+  :root{
+    --bg:#0a0e14; --panel:#111721; --line:#1d2633; --txt:#dfe6ee;
+    --dim:#7d8899; --bid:#26a269; --ask:#c01c28;
+    --bid-bar:#1a5c3d; --ask-bar:#6e1620; --mur:#e8a33d;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+       font:13px/1.4 ui-monospace,"Cascadia Mono",Consolas,monospace;
+       padding:14px}
+  h1{font:600 15px/1.2 ui-sans-serif,system-ui;margin:0 0 2px}
+  .sub{color:var(--dim);font-size:11.5px;margin-bottom:14px;
+       font-family:ui-sans-serif,system-ui}
+  .sub b{color:var(--txt)}
+
+  .barre{display:flex;gap:8px;align-items:center;margin-bottom:12px;
+         flex-wrap:wrap;font-family:ui-sans-serif,system-ui}
+  select,button{background:var(--panel);color:var(--txt);
+    border:1px solid var(--line);border-radius:6px;padding:6px 10px;
+    font:12.5px ui-sans-serif,system-ui;cursor:pointer}
+  button:hover,select:hover{border-color:#31445c}
+  button.on{background:#1b3049;border-color:#2f5680}
+  .etat{margin-left:auto;font-size:11.5px;color:var(--dim)}
+  .pastille{display:inline-block;width:8px;height:8px;border-radius:50%;
+            background:#555;margin-right:5px;vertical-align:1px}
+  .pastille.ok{background:var(--bid)} .pastille.ko{background:var(--ask)}
+
+  .grille{display:grid;grid-template-columns:minmax(340px,1fr) 260px;
+          gap:12px;align-items:start}
+  @media(max-width:820px){.grille{grid-template-columns:1fr}}
+
+  .carte{background:var(--panel);border:1px solid var(--line);
+         border-radius:9px;overflow:hidden}
+  .carte h2{font:600 10.5px/1 ui-sans-serif,system-ui;letter-spacing:.7px;
+    text-transform:uppercase;color:var(--dim);margin:0;padding:10px 12px;
+    border-bottom:1px solid var(--line)}
+
+  table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+  .ladder td{padding:1px 8px;position:relative;white-space:nowrap;height:19px}
+  .ladder .px{text-align:center;width:31%;font-weight:600}
+  .ladder .qb{text-align:right;width:34.5%;color:var(--bid)}
+  .ladder .qa{text-align:left;width:34.5%;color:var(--ask)}
+  /* La barre de profondeur est peinte DERRIERE le chiffre : on lit la
+     valeur exacte et l'ordre de grandeur d'un seul coup d'oeil. */
+  .bar{position:absolute;top:2px;bottom:2px;opacity:.5;border-radius:2px}
+  .bar.b{right:0;background:var(--bid-bar)}
+  .bar.a{left:0;background:var(--ask-bar)}
+  .ladder td span{position:relative;z-index:1}
+  tr.mur .qb span,tr.mur .qa span{color:var(--mur);font-weight:700}
+  tr.spread td{background:#0d131b;color:var(--dim);text-align:center;
+    font-size:11px;padding:5px;letter-spacing:.5px}
+  tr.spread b{color:var(--txt);font-size:13px}
+
+  .ts{max-height:452px;overflow-y:auto}
+  .ts table{font-size:11.5px}
+  .ts td{padding:2px 8px;white-space:nowrap}
+  .ts .h{color:var(--dim);width:38%}
+  .ts .p{text-align:right;width:34%}
+  .ts .q{text-align:right;width:28%;color:var(--dim)}
+  .ts tr.achat .p{color:var(--bid)} .ts tr.vente .p{color:var(--ask)}
+  .ts tr.gros{background:#1a1408} .ts tr.gros .q{color:var(--mur);font-weight:700}
+
+  .stats{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line)}
+  .stat{background:var(--panel);padding:9px 11px}
+  .stat .k{color:var(--dim);font-size:10px;text-transform:uppercase;
+           letter-spacing:.5px;font-family:ui-sans-serif,system-ui}
+  .stat .v{font-size:16px;font-weight:700;margin-top:2px}
+  .pos{color:var(--bid)} .neg{color:var(--ask)}
+  .note{color:var(--dim);font-size:11px;padding:9px 12px;line-height:1.5;
+        border-top:1px solid var(--line);font-family:ui-sans-serif,system-ui}
+</style>
+</head>
+<body>
+
+<h1>Carnet d'ordres en temps réel</h1>
+<div class="sub" id="sub">connexion…</div>
+
+<div class="barre">
+  <select id="venue">
+    <option value="binance">Binance perpétuels</option>
+    <option value="bybit">Bybit perpétuels</option>
+  </select>
+  <select id="sym">
+    <option value="BTCUSDT">BTC/USDT</option>
+    <option value="ETHUSDT">ETH/USDT</option>
+    <option value="SOLUSDT">SOL/USDT</option>
+  </select>
+  <select id="group">
+    <option value="0">groupement : aucun</option>
+    <option value="1">1 $</option>
+    <option value="5">5 $</option>
+    <option value="10" selected>10 $</option>
+    <option value="50">50 $</option>
+  </select>
+  <button id="fige">Figer</button>
+  <span class="etat"><span class="pastille" id="dot"></span><span id="etat">—</span></span>
+</div>
+
+<div class="grille">
+  <div class="carte">
+    <h2>Profondeur — <span id="titreSym">—</span></h2>
+    <table class="ladder"><tbody id="ladder"></tbody></table>
+    <div class="note">
+      Les barres montrent la taille relative à chaque niveau.
+      <b style="color:var(--mur)">En orange</b> : un ordre au moins 4 fois
+      supérieur à la médiane des niveaux affichés — un mur.
+    </div>
+  </div>
+
+  <div>
+    <div class="carte" style="margin-bottom:12px">
+      <h2>Pression</h2>
+      <div class="stats">
+        <div class="stat"><div class="k">Déséquilibre</div>
+          <div class="v" id="obi">—</div></div>
+        <div class="stat"><div class="k">Spread</div>
+          <div class="v" id="spread">—</div></div>
+        <div class="stat"><div class="k">Delta 1 min</div>
+          <div class="v" id="delta">—</div></div>
+        <div class="stat"><div class="k">Delta cumulé</div>
+          <div class="v" id="cvd">—</div></div>
+      </div>
+      <div class="note">
+        Le <b>déséquilibre</b> compare le notionnel acheteur et vendeur affiché.
+        Le <b>delta</b> ne compte que les transactions : positif quand
+        l'acheteur vient frapper l'offre.
+      </div>
+    </div>
+
+    <div class="carte">
+      <h2>Transactions</h2>
+      <div class="ts"><table><tbody id="ts"></tbody></table></div>
+      <div class="note">Surligné : au-delà de 100 000 $.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ===================== CONFIGURATION ===================== */
+const NIVEAUX = 14;          // lignes de chaque côté du ladder
+const MUR_MULT = 4;          // taille / médiane pour qualifier un mur
+const GROS_TRADE = 100_000;  // $ — seuil de surlignage
+const MAX_TS = 60;           // transactions conservées à l'écran
+
+const $ = id => document.getElementById(id);
+const nf0 = n => n.toLocaleString("fr-FR", {maximumFractionDigits:0});
+const nf2 = n => n.toLocaleString("fr-FR", {minimumFractionDigits:2,
+                                            maximumFractionDigits:2});
+
+let ws = null, fige = false, cvd = 0, deltas = [];
+let livre = {bids:[], asks:[]};
+
+/* ===================== CONNEXION ===================== */
+/* Les deux plateformes diffusent leur carnet en clair, sans compte ni clé :
+   ces flux sont publics. La licence CME à 290 $/mois ne concerne que les
+   futures réglementés, pas la crypto. */
+const FLUX = {
+  binance: {
+    url: s => `wss://fstream.binance.com/stream?streams=`
+            + `${s.toLowerCase()}@depth20@100ms/${s.toLowerCase()}@aggTrade`,
+    lire: m => {
+      const d = m.data, f = m.stream || "";
+      if (f.includes("depth")) return {type:"livre", bids:d.b, asks:d.a};
+      if (f.includes("aggTrade")) return {type:"trade", px:+d.p, qte:+d.q,
+                                          vente:d.m, t:d.T};
+      return null;
+    },
+    souscrire: null,
+  },
+  bybit: {
+    url: () => "wss://stream.bybit.com/v5/public/linear",
+    souscrire: s => JSON.stringify({op:"subscribe",
+      args:[`orderbook.50.${s}`, `publicTrade.${s}`]}),
+    lire: m => {
+      if (!m.topic) return null;
+      if (m.topic.startsWith("orderbook") && m.data)
+        return {type:"livre", bids:m.data.b, asks:m.data.a, delta:m.type!=="snapshot"};
+      if (m.topic.startsWith("publicTrade") && m.data)
+        return {type:"trades", liste:m.data.map(t => ({
+          px:+t.p, qte:+t.v, vente:t.S === "Sell", t:+t.T}))};
+      return null;
+    },
+  },
+};
+
+function etat(txt, ok){
+  $("etat").textContent = txt;
+  $("dot").className = "pastille" + (ok === true ? " ok" : ok === false ? " ko" : "");
+}
+
+function connecter(){
+  if (ws){ ws.onclose = null; ws.close(); ws = null; }
+  livre = {bids:[], asks:[]}; cvd = 0; deltas = [];
+  $("ts").innerHTML = ""; $("ladder").innerHTML = "";
+
+  const v = $("venue").value, s = $("sym").value;
+  const cfg = FLUX[v];
+  $("titreSym").textContent = s;
+  $("sub").innerHTML = `<b>${s}</b> · ${v} · flux public, aucun compte requis`;
+  etat("connexion…", null);
+
+  ws = new WebSocket(cfg.url(s));
+  ws.onopen = () => {
+    etat("connecté", true);
+    if (cfg.souscrire) ws.send(cfg.souscrire(s));
+  };
+  ws.onclose = () => { etat("déconnecté — reconnexion…", false);
+                       setTimeout(connecter, 2500); };
+  ws.onerror  = () => etat("erreur de flux", false);
+  ws.onmessage = ev => {
+    let m; try { m = JSON.parse(ev.data); } catch(e){ return; }
+    const r = cfg.lire(m);
+    if (!r || fige) return;
+    if (r.type === "livre")  majLivre(r);
+    if (r.type === "trade")  ajouterTrade(r);
+    if (r.type === "trades") r.liste.forEach(ajouterTrade);
+  };
+}
+
+/* ===================== CARNET ===================== */
+function fusionner(cote, maj){
+  /* Bybit envoie des deltas : une quantité nulle retire le niveau.
+     Binance renvoie un instantané complet, la fusion est alors triviale. */
+  const m = new Map(cote.map(([p,q]) => [p, q]));
+  for (const [p,q] of maj){ if (+q === 0) m.delete(p); else m.set(p, q); }
+  return [...m.entries()];
+}
+
+function majLivre(r){
+  livre.bids = r.delta ? fusionner(livre.bids, r.bids) : r.bids;
+  livre.asks = r.delta ? fusionner(livre.asks, r.asks) : r.asks;
+  dessiner();
+}
+
+function grouper(niveaux, pas, sens){
+  if (!pas) return niveaux.map(([p,q]) => [+p, +q]);
+  const m = new Map();
+  for (const [p,q] of niveaux){
+    const k = sens > 0 ? Math.floor(+p/pas)*pas : Math.ceil(+p/pas)*pas;
+    m.set(k, (m.get(k) || 0) + +q);
+  }
+  return [...m.entries()];
+}
+
+function dessiner(){
+  const pas = +$("group").value;
+  let bids = grouper(livre.bids, pas, 1).sort((a,b) => b[0]-a[0]).slice(0, NIVEAUX);
+  let asks = grouper(livre.asks, pas, -1).sort((a,b) => a[0]-b[0]).slice(0, NIVEAUX);
+  if (!bids.length || !asks.length) return;
+
+  const tailles = [...bids, ...asks].map(x => x[1]).sort((a,b) => a-b);
+  const mediane = tailles[Math.floor(tailles.length/2)] || 1;
+  const maxi = tailles[tailles.length-1] || 1;
+
+  const mb = bids[0][0], ma = asks[0][0];
+  const spread = ma - mb, mid = (ma+mb)/2;
+  $("spread").textContent = spread.toFixed(2) + " $";
+
+  const nb = bids.reduce((s,[p,q]) => s+p*q, 0);
+  const na = asks.reduce((s,[p,q]) => s+p*q, 0);
+  const obi = (nb-na)/(nb+na);
+  $("obi").textContent = (obi>0?"+":"") + (obi*100).toFixed(1) + " %";
+  $("obi").className = "v " + (obi>0.05 ? "pos" : obi<-0.05 ? "neg" : "");
+
+  const lignes = [];
+  for (let i = asks.length-1; i >= 0; i--){
+    const [p,q] = asks[i];
+    lignes.push(rang(p, q, "a", q >= MUR_MULT*mediane, maxi));
+  }
+  lignes.push(`<tr class="spread"><td colspan="3">spread
+      <b>${spread.toFixed(2)} $</b> · mid <b>${nf2(mid)}</b></td></tr>`);
+  for (const [p,q] of bids)
+    lignes.push(rang(p, q, "b", q >= MUR_MULT*mediane, maxi));
+  $("ladder").innerHTML = lignes.join("");
+}
+
+function rang(px, qte, cote, mur, maxi){
+  const pct = Math.min(100, qte/maxi*100);
+  const bar = `<span class="bar ${cote}" style="width:${pct}%"></span>`;
+  const val = `<span>${qte >= 100 ? nf0(qte) : nf2(qte)}</span>`;
+  return `<tr class="${mur?"mur":""}">`
+    + (cote === "b"
+        ? `<td class="qb">${bar}${val}</td><td class="px">${nf2(px)}</td><td></td>`
+        : `<td></td><td class="px">${nf2(px)}</td><td class="qa">${bar}${val}</td>`)
+    + `</tr>`;
+}
+
+/* ===================== TRANSACTIONS ===================== */
+function ajouterTrade(t){
+  const notionnel = t.px * t.qte;
+  const signe = t.vente ? -1 : 1;
+  cvd += signe * t.qte;
+  deltas.push({t: t.t || Date.now(), d: signe * t.qte});
+
+  const limite = Date.now() - 60_000;
+  while (deltas.length && deltas[0].t < limite) deltas.shift();
+  const d1 = deltas.reduce((s,x) => s+x.d, 0);
+
+  $("delta").textContent = (d1>0?"+":"") + nf2(d1);
+  $("delta").className = "v " + (d1>0 ? "pos" : d1<0 ? "neg" : "");
+  $("cvd").textContent = (cvd>0?"+":"") + nf2(cvd);
+  $("cvd").className = "v " + (cvd>0 ? "pos" : cvd<0 ? "neg" : "");
+
+  const h = new Date(t.t || Date.now()).toLocaleTimeString("fr-FR");
+  const tr = document.createElement("tr");
+  tr.className = (t.vente ? "vente" : "achat") + (notionnel >= GROS_TRADE ? " gros" : "");
+  tr.innerHTML = `<td class="h">${h}</td>`
+    + `<td class="p">${nf2(t.px)}</td>`
+    + `<td class="q">${t.qte < 1 ? t.qte.toFixed(3) : nf2(t.qte)}</td>`;
+  const corps = $("ts");
+  corps.insertBefore(tr, corps.firstChild);
+  while (corps.children.length > MAX_TS) corps.removeChild(corps.lastChild);
+}
+
+/* ===================== CONTROLES ===================== */
+$("venue").onchange = connecter;
+$("sym").onchange   = connecter;
+$("group").onchange = dessiner;
+$("fige").onclick = () => {
+  fige = !fige;
+  $("fige").textContent = fige ? "Reprendre" : "Figer";
+  $("fige").className = fige ? "on" : "";
+  etat(fige ? "figé" : "connecté", !fige);
+};
+
+connecter();
+</script>
+</body>
+</html>
