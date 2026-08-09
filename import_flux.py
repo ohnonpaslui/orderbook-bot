@@ -58,18 +58,37 @@ COLONNES = ["ts", "open", "high", "low", "close", "volume",
 I_PRIX, I_QTE, I_TS, I_MAKER = 1, 2, 5, 6
 
 
-def telecharger(jour, dest):
+def telecharger(jour, dest, essais=4):
+    """
+    Télécharge un jour, avec réessais bornés.
+
+    Sans réessai, une coupure DNS passagère fait perdre le jour entier : lors
+    du premier import, 58 jours sur 93 ont été perdus ainsi, ce qui a réduit
+    l'échantillon indépendant de 1 100 à 420 observations et rendu le test
+    incapable de trancher. Une panne réseau ne doit pas se confondre avec une
+    absence de données.
+    """
     req = urllib.request.Request(URL.format(sym=SYMBOLE, jour=jour),
                                  headers={"User-Agent": "orderbook-bot"})
-    with urllib.request.urlopen(req, timeout=180) as r, open(dest, "wb") as f:
-        total = 0
-        while True:
-            bloc = r.read(1 << 20)
-            if not bloc:
-                break
-            f.write(bloc)
-            total += len(bloc)
-    return total
+    for k in range(1, essais + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=180) as r, open(dest, "wb") as f:
+                total = 0
+                while True:
+                    bloc = r.read(1 << 20)
+                    if not bloc:
+                        break
+                    f.write(bloc)
+                    total += len(bloc)
+            return total
+        except urllib.error.HTTPError:
+            raise                          # 404 : le jour n'existe pas, inutile d'insister
+        except Exception as e:
+            if k == essais:
+                raise
+            print(f"      reseau ({type(e).__name__}), essai {k}/{essais}",
+                  flush=True)
+            time.sleep(3 * k)
 
 
 def agreger(zip_path, barre_sec):

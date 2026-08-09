@@ -91,27 +91,31 @@ if inutiles:
     print(f"  (declares mais non utilises : {sorted(inutiles)})")
 
 # --- 3. toutes les fonctions appelees sont-elles definies ? ---
-definies = set(re.findall(r"function\s+(\w+)\s*\(", script))
+# L'analyse porte sur `net`, la version SANS chaines ni commentaires. Sur le
+# script brut, la prose francaise des gabarits (« ... 3 candidat(s) ... »)
+# ressort comme autant d'appels a des fonctions inexistantes.
+definies = set(re.findall(r"function\s+(\w+)\s*\(", net))
 definies |= set(re.findall(r"const\s+(\w+)\s*=\s*(?:async\s*)?\(?[\w,\s]*\)?\s*=>",
-                           script))
-appelees = set(re.findall(r"\b(\w+)\s*\(", script))
+                           net))
+# Le lookbehind ecarte les APPELS DE METHODE : `m.get(p)` sur une Map n'est
+# pas un appel a une fonction `get` non definie.
+appelees = set(re.findall(r"(?<![.\w$])(\w+)\s*\(", net))
 NATIF = {"if","for","while","switch","catch","return","function","fetch","Number",
          "String","Object","Array","Math","JSON","parseFloat","parseInt","setInterval",
          "setTimeout","console","await","typeof","map","join","filter","reduce",
          "split","slice","reverse","toFixed","replace","sort","entries","from",
          "fromEntries","min","max","abs","toLocaleString","trim","indexOf","push",
          "async","Promise","all","json","text","ok","catch","then","forEach"}
+# On ne compare plus a une liste ecrite en dur — elle se desynchronisait a
+# chaque nouvelle page. Toute fonction appelee sans etre definie ni native
+# est signalee, ce qui vaut pour n'importe quel fichier du depot.
 inconnues = {f for f in appelees - definies - NATIF
              if f.islower() and not f.startswith("_")}
 print(f"\nfonctions : {len(definies)} definies")
-reelles = {f for f in inconnues if f in
-           {"renduCartes","renduEntonnoir","renduHisto","renduSetup",
-            "renduEquity","renduTrades","message","parseCSV","get","carte",
-            "load","loadSafe","nf","usd","cls"} - definies}
-if reelles:
-    erreurs.append(f"fonctions appelees mais non definies : {sorted(reelles)}")
+if inconnues:
+    erreurs.append(f"fonctions appelees mais non definies : {sorted(inconnues)}")
 else:
-    print("  toutes les fonctions du dashboard sont definies")
+    print("  toutes les fonctions appelees sont definies")
 
 # --- 4. balises HTML fermees ? ---
 for balise in ("div", "table", "tbody", "thead", "tr", "svg", "script", "style"):
@@ -132,16 +136,25 @@ def cles_produites(fichier, marqueur):
     return set(re.findall(r'"(\w+)"\s*:', bloc))
 
 
-attendues = (cles_produites("strategy.py", "def diagnostic")
-             | cles_produites("diagnostics.py", "d.update"))
-print(f"\ncles produites par le code : {len(attendues)}")
-utilisees = set(re.findall(r"\bd(?:iag)?\.(\w+)", script))
-absentes = utilisees - attendues - {"setup","rejets"}
-print(f"\ncles du diagnostic utilisees : {len(utilisees)}")
-if absentes:
-    erreurs.append(f"cles lues mais jamais ecrites par diagnostics.py : {sorted(absentes)}")
+# Ce controle ne vaut que pour une page qui lit diagnostics.json. Sur le DOM
+# temps reel, `d` designe un message WebSocket : d.p, d.q, d.m sont des champs
+# Binance, pas des cles de diagnostic. L'appliquer partout produirait des faux
+# positifs qu'on finirait par ignorer, ce qui viderait le controle de son sens.
+if "diagnostics.json" in t:
+    attendues = (cles_produites("strategy.py", "def diagnostic")
+                 | cles_produites("diagnostics.py", "d.update"))
+    utilisees = set(re.findall(r"\bd(?:iag)?\.(\w+)", script))
+    absentes = utilisees - attendues - {"setup", "rejets"}
+    print(f"\ncles du diagnostic : {len(utilisees)} lues, "
+          f"{len(attendues)} produites par le code")
+    if absentes:
+        erreurs.append(f"cles lues mais jamais ecrites par diagnostics.py : "
+                       f"{sorted(absentes)}")
+    else:
+        print("  toutes correspondent a ce que diagnostics.py produit")
 else:
-    print("  toutes correspondent a ce que diagnostics.py produit")
+    print("\ncles du diagnostic : sans objet (cette page ne lit pas "
+          "diagnostics.json)")
 
 print("\n" + "=" * 58)
 if erreurs:
