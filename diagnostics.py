@@ -64,6 +64,7 @@ class Observateur:
         """
         vide = {"snapshots": 0, "signaux": 0, "rejets": {},
                 "obi_hist": [0] * len(self.strat.obi_hist), "obi_max": 0.0,
+                "stop_hist": [0] * len(self.strat.stop_hist),
                 "depuis": None, "sessions": 0}
         try:
             with open(self.chemin, encoding="utf-8") as f:
@@ -83,6 +84,10 @@ class Observateur:
             "rejets":    dict(d.get("rejets") or {}),
             "obi_hist":  list(d["obi_hist"]),
             "obi_max":   float(d.get("obi_max", 0.0)),
+            # Ajoute apres coup : absent des anciens fichiers, on repart de zero
+            # pour cet histogramme sans perdre le reste du cumul.
+            "stop_hist": list(d.get("stop_hist")
+                              or [0] * len(self.strat.stop_hist)),
             "depuis":    d.get("depuis") or d.get("maj"),
             # Pas de +1 ici : c'est `ecrire` qui incremente, sinon la session
             # serait comptee deux fois.
@@ -130,6 +135,8 @@ class Observateur:
         d["signaux"]   = c["signaux"]   + session["signaux"]
         d["obi_max"]   = round(max(c["obi_max"], session["obi_max"]), 4)
         d["obi_hist"]  = [a + b for a, b in zip(c["obi_hist"], session["obi_hist"])]
+        d["stop_hist"] = [a + b for a, b in zip(c["stop_hist"], session["stop_hist"])]
+        d["candidats"] = sum(d["stop_hist"])
         d["rejets"]    = dict(c["rejets"])
         for k, v in session["rejets"].items():
             d["rejets"][k] = d["rejets"].get(k, 0) + v

@@ -65,6 +65,13 @@ class SetupBookStrategy:
         self.obi_hist = [0] * 50     # |obi_ema| de 0 à 1.0
         self.obi_max  = 0.0
 
+        # Largeur du stop des candidats parvenus jusqu'à la géométrie du trade.
+        # Sans cette mesure, « stop trop serré » ne dit pas DE COMBIEN il a
+        # manqué : 27 bps pour un minimum à 28.6 n'appelle pas la même décision
+        # que 12 bps. Tranches de 5 bps jusqu'à 150.
+        self.stop_pas  = 5.0
+        self.stop_hist = [0] * 30
+
     # ---------------------------------------------------------------- état
     def notify_close(self, ts):
         """Appelé par le runner à la clôture d'une position : arme le cooldown."""
@@ -171,6 +178,8 @@ class SetupBookStrategy:
             return self._reject("invalidation du mauvais cote")
 
         stop_bps = risk / entry * 10_000
+        self.stop_hist[min(int(stop_bps / self.stop_pas),
+                           len(self.stop_hist) - 1)] += 1
         if stop_bps < C.MIN_STOP_BPS:
             # Le stop vient de la structure : on ne l'élargit pas pour faire
             # rentrer le trade, on écarte le setup.
@@ -232,6 +241,9 @@ class SetupBookStrategy:
             "obi_hist":   list(self.obi_hist),
             "obi_pas":    self.obi_pas,      # largeur d'une tranche
             "obi_max":    round(self.obi_max, 4),
+            "stop_hist":  list(self.stop_hist),
+            "stop_pas":   self.stop_pas,
+            "candidats":  sum(self.stop_hist),   # ayant atteint la géométrie
             # Combien de fois chaque seuil candidat aurait été franchi. C'est
             # la table qui sert à choisir CONFIRM_ENTRY, sans rien modifier en
             # production ni attendre la phase 2.

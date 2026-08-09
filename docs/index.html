@@ -112,6 +112,17 @@
   <div class="axis" id="axis"></div>
 </div>
 
+<!-- ============ STOPS ============ -->
+<div class="panel" id="stopPanel">
+  <h2>Largeur des stops des candidats</h2>
+  <p class="hint" id="stopHint">Distribution du stop structurel des setups
+    parvenus jusqu'au calcul du trade. Les barres rouges sont sous le minimum
+    imposé par les frais : ces trades sont écartés parce que leur géométrie ne
+    peut pas les rentabiliser.</p>
+  <div class="hist" id="stopHist"></div>
+  <div class="axis" id="stopAxis"></div>
+</div>
+
 <!-- ============ SETUP ============ -->
 <div class="panel">
   <h2>Setup technique en cours</h2>
@@ -294,6 +305,45 @@ function renduHisto(d){
   $("obiHint").innerHTML = txt;
 }
 
+function renduStops(d){
+  const h = d.stop_hist || [];
+  const tot = h.reduce((s,n) => s+n, 0);
+  const pas = d.stop_pas || 5;
+  const mini = Number(d.stop_min_bps || 0);
+  if (!tot){
+    $("stopHist").innerHTML = "";
+    $("stopAxis").innerHTML = "";
+    $("stopHint").innerHTML = `<span class="dim">Aucun candidat n'a encore
+      atteint le calcul du trade — il faut qu'un setup soit armé, que le prix
+      soit dans la zone et que le carnet confirme de façon soutenue.</span>`;
+    return;
+  }
+  let dernier = 0;
+  h.forEach((n,i) => { if (n) dernier = i; });
+  const fin = Math.min(h.length, Math.max(dernier + 2, Math.ceil(mini/pas) + 3));
+  const vus = h.slice(0, fin);
+  const max = Math.max(...vus) || 1;
+
+  $("stopHist").innerHTML = vus.map((n,i) => {
+    const sous = (i+1)*pas <= mini;      // entièrement sous le minimum
+    return `<div class="hbar ${sous?"":"over"}" style="height:${n/max*100}%;` +
+           (sous ? "background:var(--down)" : "") + `"
+           title="${i*pas}–${(i+1)*pas} bps : ${nf(n)} candidat(s)"></div>`;
+  }).join("") + `<div class="seuil" style="left:${mini/pas/fin*100}%"
+                      data-l="min ${mini} bps"></div>`;
+
+  $("stopAxis").innerHTML = vus.map((_,i) =>
+    `<span>${i%2===0 ? i*pas : ""}</span>`).join("");
+
+  const rejetes = h.reduce((s,n,i) => (i+1)*pas <= mini ? s+n : s, 0);
+  $("stopHint").innerHTML = rejetes === tot
+    ? `<b class="warn">Les ${nf(tot)} candidat(s) ont tous un stop sous
+       ${mini} bps</b> — leur géométrie ne couvre pas les frais, aucun n'a pu
+       être pris. C'est le garde-fou qui joue son rôle, pas une panne.`
+    : `${nf(tot)} candidat(s) évalué(s), dont <b>${nf(rejetes)}</b> écarté(s)
+       pour stop trop serré (${(rejetes/tot*100).toFixed(0)} %).`;
+}
+
 function renduSetup(d){
   const s = d.setup;
   if (!s){
@@ -390,6 +440,7 @@ async function load(){
 
     renduEntonnoir(diag);
     renduHisto(diag);
+    renduStops(diag);
     renduSetup(diag);
     $("foot").innerHTML = `RR ${diag.rr} · confirmation exigée sur
       ${diag.obi_min_hold} snapshots consécutifs · seuil OBI ${diag.obi_entry}
