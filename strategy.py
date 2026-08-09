@@ -154,10 +154,17 @@ class SetupBookStrategy:
             return self._reject("prix sorti de la zone")
 
         # --- 2. le carnet doit confirmer dans le sens du setup ---
-        if side != attendu:
-            return self._reject("carnet ne confirme pas")
-        if self.streak < C.CONFIRM_MIN_HOLD:
-            return self._reject("confirmation trop breve")
+        # En mode "aucun" la structure décide seule ; en mode "inverse" on
+        # exige que le carnet pousse à contresens. Les deux servent à mesurer
+        # ce que le carnet apporte réellement (voir C.CONFIRM_MODE).
+        if C.CONFIRM_MODE != "aucun":
+            requis = attendu
+            if C.CONFIRM_MODE == "inverse":
+                requis = "sell" if attendu == "buy" else "buy"
+            if side != requis:
+                return self._reject("carnet ne confirme pas")
+            if self.streak < C.CONFIRM_MIN_HOLD:
+                return self._reject("confirmation trop breve")
         if row["spread_bps"] > C.MAX_SPREAD_BPS:
             return self._reject("spread")
 

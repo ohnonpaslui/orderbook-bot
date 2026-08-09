@@ -127,6 +127,15 @@ WALL_MIN_NOTIONAL = 50_000.0    # ... et au moins 50 000 $ notionnel
 # était quasi impossible, ce qui explique les zéro signal des deux premiers
 # jours.
 CONFIRM_SIGNAL   = "mpi"        # "mpi" | "obi_5" | "obi_10" | "obi_25" | "obi_50"
+# Rôle du carnet dans la décision. Sert à isoler sa contribution réelle :
+#   "normal"  le carnet doit pousser dans le sens du setup
+#   "inverse" le carnet doit pousser CONTRE — teste l'hypothèse d'épuisement,
+#             selon laquelle une pression déjà visible est une pression en
+#             train de finir, et l'on entre donc à contretemps
+#   "aucun"   le carnet est ignoré, seule la structure décide
+# Comparer les trois sur les mêmes données dit si le carnet aide, nuit, ou ne
+# sert à rien — ce qu'aucun balayage de seuils ne peut révéler.
+CONFIRM_MODE     = "normal"
 CONFIRM_EMA_SPAN = 3            # lissage court : ~6 s à 2 s/snapshot
 CONFIRM_ENTRY    = 0.50         # |signal lissé| requis pour confirmer
 CONFIRM_MIN_HOLD = 10           # snapshots consécutifs au-dessus du seuil
