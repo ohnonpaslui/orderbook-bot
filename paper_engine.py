@@ -54,7 +54,7 @@ def _iso(ts):
 
 
 # ----------------------------- Cycle ------------------------------------------
-def step(bot, state, row, signal, strat, record=True):
+def step(bot, state, row, signal, strat, record=True, forcer=None):
     """
     Un tick pour un bot : gestion de la position ouverte d'abord, puis
     ouverture éventuelle. Retourne (state, changed, events).
@@ -62,6 +62,8 @@ def step(bot, state, row, signal, strat, record=True):
     `strat` sert uniquement à armer le cooldown à la clôture.
     `record=False` désactive l'écriture disque (utilisé par le backtest, qui
     collecte les trades en mémoire).
+    `forcer` solde la position au prix de `row` quel qu'il soit — utilisé pour
+    fermer proprement avant un trou dans les données.
     """
     changed, events = False, []
     pos = state.get("position")
@@ -79,10 +81,11 @@ def step(bot, state, row, signal, strat, record=True):
             hit_tp  = exit_px <= pos["tp"]
 
         expired = (ts - pos["opened_ts"]) >= C.MAX_HOLD_SEC
-        if hit_sl or hit_tp or expired:
+        if forcer or hit_sl or hit_tp or expired:
             # SL prioritaire : dans le doute sur un même tick, on suppose le
             # scénario défavorable plutôt que de gonfler artificiellement les stats.
-            outcome = "SL" if hit_sl else ("TP" if hit_tp else "TIMEOUT")
+            outcome = (forcer if forcer else
+                       "SL" if hit_sl else ("TP" if hit_tp else "TIMEOUT"))
             direction = 1 if pos["side"] == "buy" else -1
             qty = pos["qty"]
 

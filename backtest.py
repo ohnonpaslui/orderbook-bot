@@ -78,6 +78,7 @@ def stats(trades, equity):
         "pf":       round(gross_win / gross_loss, 2) if gross_loss else float("inf"),
         "fees":     round(sum(t["fees"] for t in trades), 2),
         "timeouts": sum(1 for t in trades if t["result"] == "TIMEOUT"),
+        "gaps":     sum(1 for t in trades if t["result"] == "GAP"),
         "hold_med": int(sorted(t["hold_s"] for t in trades)[len(trades) // 2]),
     }
 
@@ -149,7 +150,30 @@ def run(rows, bougies=None, venue=None, verbose=False):
     tf_sec = K.TF_MS[C.TIMEFRAME] / 1000
     i_bougie = -1
 
+    # Les données peuvent être discontinues : fenêtres importées non
+    # contiguës, session de collecte interrompue, panne de plateforme.
+    # Sans traitement, une position ouverte avant un trou est « clôturée » au
+    # premier instantané d'après, à un prix qui n'a rien à voir — mesuré :
+    # une perte de 65 % du capital en 10 trades, impossible à 1 % de risque.
+    # On solde donc au dernier prix connu et on repart d'un état neuf.
+    GAP_MAX = 300.0
+    prev = None
+    n_gaps = 0
+
     for row in rows:
+        if prev is not None and row["ts"] - prev["ts"] > GAP_MAX:
+            n_gaps += 1
+            if state.get("position"):
+                before = state["wins"] + state["losses"]
+                state, _, _ = paper_engine.step(C.BOT_ID, state, prev, None,
+                                                strat, record=False,
+                                                forcer="GAP")
+                if state["wins"] + state["losses"] > before:
+                    trades.append(state["last_trades"][-1])
+                    equity.append(state["capital"])
+            strat = SetupBookStrategy()      # lissage et streak repartent à zéro
+            i_bougie = -1
+        prev = row
         # Avance jusqu'à la dernière bougie CLÔTURÉE avant ce snapshot.
         # Utiliser une bougie encore en formation reviendrait à lire le futur.
         suivant = i_bougie
@@ -177,6 +201,10 @@ def run(rows, bougies=None, venue=None, verbose=False):
         if verbose and events:
             for e in events:
                 print(f"  {datetime.fromtimestamp(row['ts'], timezone.utc):%m-%d %H:%M}  {e}")
+
+    if verbose and n_gaps:
+        print(f"\n  {n_gaps} interruption(s) dans les données : positions "
+              f"soldées au dernier prix connu (résultat GAP), état remis à zéro.")
 
     if verbose and rejects:
         top = sorted(rejects.items(), key=lambda x: -x[1])[:6]
