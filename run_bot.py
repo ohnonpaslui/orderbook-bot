@@ -48,7 +48,8 @@ def main():
     tf_sec = K.TF_MS[C.TIMEFRAME] / 1000
 
     def rafraichir_structure():
-        bougies = K.fetch(C.VENUE, C.TIMEFRAME, days=30, verbose=False)
+        jours = int(T.BOUGIES_REQUISES * K.TF_MS[C.TIMEFRAME] / 86_400_000) + 3
+        bougies = K.fetch(C.VENUE, C.TIMEFRAME, days=jours, verbose=False)
         T.add_indicators(bougies)
         raison = strat.update_candles(bougies)
         etat = ("aucun setup" if strat.setup is None

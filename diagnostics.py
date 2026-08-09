@@ -98,7 +98,9 @@ class Observateur:
     def rafraichir(self):
         """Recharge les bougies et recalcule le setup. Tolère un échec réseau."""
         try:
-            self.bougies = K.fetch(self.venue, C.TIMEFRAME, days=30, verbose=False)
+            jours = int(T.BOUGIES_REQUISES * K.TF_MS[C.TIMEFRAME] / 86_400_000) + 3
+            self.bougies = K.fetch(self.venue, C.TIMEFRAME, days=jours,
+                                   verbose=False)
             T.add_indicators(self.bougies)
             self.raison_setup = self.strat.update_candles(self.bougies)
             self.derniere_bougie = self.bougies[-1]["ts"] / 1000 if self.bougies else 0.0

@@ -34,6 +34,27 @@ SR_TOLERANCE_ATR = 0.5    # deux pivots à moins de 0.5 ATR = même zone
 SR_MIN_TOUCHES   = 2      # une zone crédible a été touchée au moins 2 fois
 SR_MAX_ZONES     = 12
 
+# Profondeur d'historique prise en compte pour les pivots, en bougies.
+#
+# Ce n'est pas un réglage de confort, c'est une condition de cohérence. Sans
+# fenêtre fixe, le nombre de pivots dépend de la quantité de bougies chargée :
+# l'observateur live en charge 30 jours, un backtest peut en charger 900. Les
+# zones S/R — donc les setups — différeraient entre les deux, alors que tout
+# le projet repose sur le fait qu'ils exécutent le même code sur les mêmes
+# règles. Une fenêtre bornée les aligne, et accessoirement rend le calcul
+# linéaire au lieu de quadratique.
+#
+# 2000 bougies de 15 m = ~21 jours : au-delà, un ancien plus-haut n'est plus
+# un niveau que le marché regarde.
+SR_LOOKBACK = 2000
+
+# Bougies nécessaires AVANT le premier instant évalué pour que tout soit défini :
+# la MM200, la fenêtre de pivots, et le décalage de confirmation. En charger
+# moins ne produit pas d'erreur — ça produit silencieusement zéro setup, ce qui
+# est bien pire. Constaté sur un backtest chargé avec 4 jours d'amont au lieu
+# de 23 : la couche technique trouvait 3 setups, le backtest zéro.
+BOUGIES_REQUISES = MM_LONG + SR_LOOKBACK + PIVOT_N + 10
+
 # Retracements Fibonacci
 FIB_NIVEAUX  = (0.382, 0.5, 0.618, 0.786)
 FIB_ZONE     = (0.5, 0.786)   # zone d'intérêt : le "golden pocket" élargi
@@ -139,17 +160,23 @@ def croisement(candles, i):
 # ============================ 3. SUPPORTS & RÉSISTANCES ======================
 def _pivots_confirmes(candles, i):
     """
-    Pivots réellement connus à l'instant i.
+    Pivots réellement connus à l'instant i, sur la fenêtre SR_LOOKBACK.
 
-    Un pivot posé sur la bougie j n'est confirmé qu'en j + PIVOT_N. Filtrer
-    là-dessus est ce qui empêche le backtest de lire le futur.
+    Deux garanties :
+      - un pivot posé sur la bougie j n'est confirmé qu'en j + PIVOT_N ;
+        filtrer là-dessus est ce qui empêche le backtest de lire le futur ;
+      - la fenêtre est bornée, donc le résultat ne dépend pas de la quantité
+        d'historique chargée (voir SR_LOOKBACK).
     """
+    fin = max(0, i - PIVOT_N) + 1
+    debut = max(0, fin - SR_LOOKBACK)
     hauts, bas = [], []
-    for j in range(0, max(0, i - PIVOT_N) + 1):
-        if candles[j]["pivot_high"] is not None:
-            hauts.append((j, candles[j]["pivot_high"]))
-        if candles[j]["pivot_low"] is not None:
-            bas.append((j, candles[j]["pivot_low"]))
+    for j in range(debut, fin):
+        c = candles[j]
+        if c["pivot_high"] is not None:
+            hauts.append((j, c["pivot_high"]))
+        if c["pivot_low"] is not None:
+            bas.append((j, c["pivot_low"]))
     return hauts, bas
 
 

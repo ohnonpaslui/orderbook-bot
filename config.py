@@ -43,6 +43,14 @@ VENUES = {
         exchange="binanceusdm", symbol="BTC/USDT:USDT",
         depth=1000, interval=2.0, fee_pct=0.05, span_bps=18.0, collect=False,
     ),
+    # Historique importé (import_binance.py), pas collecté. Sommet de carnet
+    # uniquement : la profondeur et les murs y sont absents, d'où le marqueur
+    # `_source.json` que le backtest vérifie. Mêmes frais que les perpétuels
+    # Kraken, ce qui rend l'économie du trade directement comparable.
+    "binance_hist": dict(
+        exchange="binanceusdm", symbol="BTC/USDT:USDT",
+        depth=1000, interval=2.0, fee_pct=0.05, span_bps=18.0, collect=False,
+    ),
     # Profondeur ramenée de 5000 à 1000 : les murs ne servent plus d'ancrage
     # au stop, seulement à détecter un blocage proche. 1000 niveaux couvrent
     # 36 bps (mesuré), largement assez — et le poids API passe de 250 à 50,

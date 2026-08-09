@@ -17,6 +17,7 @@ import csv
 import gzip
 import glob
 import itertools
+import json
 import os
 from datetime import datetime, timezone
 
@@ -82,18 +83,55 @@ def stats(trades, equity):
 
 
 # ----------------------------- Moteur -----------------------------------------
+def verifier_source(venue):
+    """
+    Refuse un signal que les données ne contiennent pas.
+
+    Les données importées de Binance ne portent que le sommet du carnet : la
+    profondeur y est écrite à zéro. Un zéro ressemblant à une valeur valide, un
+    backtest configuré sur `obi_10` produirait sinon des chiffres crédibles et
+    entièrement faux.
+    """
+    chemin = os.path.join(C.DATA_DIR, venue, "_source.json")
+    if not os.path.exists(chemin):
+        return
+    with open(chemin, encoding="utf-8") as f:
+        src = json.load(f)
+    ok = src.get("signaux_utilisables") or []
+    if C.CONFIRM_SIGNAL not in ok:
+        raise SystemExit(
+            f"\n{venue} ne contient pas de quoi calculer « {C.CONFIRM_SIGNAL} ».\n"
+            f"  source  : {src.get('source')}\n"
+            f"  absent  : {', '.join(src.get('colonnes_absentes', []))}\n"
+            f"  possible: {', '.join(ok)}\n"
+            f"Relance avec --set CONFIRM_SIGNAL=mpi, ou choisis une autre "
+            f"plateforme.")
+
+
 def charger_bougies(venue, rows):
     """
     Bougies couvrant la période des snapshots, indicateurs déjà calculés.
 
-    Une marge de MM_LONG bougies avant le premier snapshot est indispensable :
-    sans elle la MM200 serait indéfinie sur tout le début du backtest.
+    La fenêtre se compte depuis AUJOURD'HUI, pas depuis la durée des snapshots :
+    le cache de bougies ne sait remonter qu'en arrière à partir du présent, et
+    des données importées peuvent dater de plusieurs centaines de jours. Une
+    marge de MM_LONG bougies avant le premier snapshot est indispensable, sans
+    quoi la MM200 resterait indéfinie sur tout le début du backtest.
     """
     tf_ms  = K.TF_MS[C.TIMEFRAME]
-    marge  = (T.MM_LONG + T.PIVOT_N + 10) * tf_ms
-    jours  = ((rows[-1]["ts"] - rows[0]["ts"]) * 1000 + marge) / 86_400_000
+    marge  = T.BOUGIES_REQUISES * tf_ms
+    maintenant = datetime.now(timezone.utc).timestamp()
+    jours  = ((maintenant - rows[0]["ts"]) * 1000 + marge) / 86_400_000
     bougies = K.fetch(venue, C.TIMEFRAME, days=max(3, int(jours) + 2), verbose=False)
     T.add_indicators(bougies)
+
+    # Vérification explicite : trop peu d'amont ne casse rien visiblement, ça
+    # renvoie juste zéro setup. Mieux vaut le dire que le laisser passer.
+    amont = sum(1 for c in bougies if c["ts"] / 1000 < rows[0]["ts"])
+    if amont < T.BOUGIES_REQUISES:
+        print(f"  [!] seulement {amont} bougies avant le premier snapshot, "
+              f"{T.BOUGIES_REQUISES} requises — les setups seront incomplets "
+              f"au debut de la periode")
     return bougies
 
 
@@ -192,6 +230,11 @@ def main():
         for venue in C.VENUES:
             C.use_venue(venue)
             apply_overrides(args.set)
+            try:
+                verifier_source(venue)
+            except SystemExit as e:
+                print(f"{venue:<16} ignore : {str(e).splitlines()[1].strip()}")
+                continue
             rows = load_rows(venue, args.date_from, args.date_to)
             if not rows:
                 print(f"{venue:<10} {'aucune donnée collectée':>30}")
@@ -207,6 +250,7 @@ def main():
 
     C.use_venue(args.venue)
     apply_overrides(args.set)
+    verifier_source(args.venue)
 
     print("Chargement des snapshots...", flush=True)
     rows = load_rows(args.venue, args.date_from, args.date_to)
