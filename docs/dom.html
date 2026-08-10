@@ -92,10 +92,11 @@
     <option value="SOLUSDT">SOL/USDT</option>
   </select>
   <select id="group">
-    <option value="0">groupement : aucun</option>
+    <option value="0" selected>groupement : aucun</option>
+    <option value="0.5">0,50 $</option>
     <option value="1">1 $</option>
     <option value="5">5 $</option>
-    <option value="10" selected>10 $</option>
+    <option value="10">10 $</option>
     <option value="50">50 $</option>
   </select>
   <button id="fige">Figer</button>
@@ -143,7 +144,7 @@
 
 <script>
 /* ===================== CONFIGURATION ===================== */
-const NIVEAUX = 14;          // lignes de chaque côté du ladder
+const NIVEAUX = 20;          // lignes de chaque côté du ladder
 const MUR_MULT = 4;          // taille / médiane pour qualifier un mur
 const GROS_TRADE = 100_000;  // $ — seuil de surlignage
 const MAX_TS = 60;           // transactions conservées à l'écran
@@ -176,7 +177,7 @@ const FLUX = {
   bybit: {
     url: () => "wss://stream.bybit.com/v5/public/linear",
     souscrire: s => JSON.stringify({op:"subscribe",
-      args:[`orderbook.50.${s}`, `publicTrade.${s}`]}),
+      args:[`orderbook.200.${s}`, `publicTrade.${s}`]}),
     lire: m => {
       if (!m.topic) return null;
       if (m.topic.startsWith("orderbook") && m.data)
