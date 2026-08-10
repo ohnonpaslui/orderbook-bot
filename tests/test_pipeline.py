@@ -91,6 +91,10 @@ def ligne(ts, mid, obi):
         r[f"{cote}_wall_px"] = 0.0
         r[f"{cote}_wall_sz"] = 0.0
         r[f"{cote}_wall_bps"] = 0.0
+    # Colonnes de flux : le scenario ne teste pas le flux, mais le schema
+    # doit rester complet, sinon l'ecriture echoue.
+    for c in features.COLONNES_FLUX:
+        r[c] = 0.0
     return r
 
 
@@ -134,7 +138,10 @@ for nom, rows in scenarios.items():
 
     relus = backtest.load_rows(VENUE)
     assert len(relus) == len(rows), f"{nom} : {len(relus)} relus / {len(rows)} ecrits"
-    assert set(relus[0]) == set(features.COLUMNS), f"{nom} : schema altere"
+    # `load_rows` ajoute `flux_reel` : il distingue un zero mesure d'un
+    # zero faute de colonne dans un fichier anterieur au flux.
+    assert set(relus[0]) == set(features.COLUMNS) | {"flux_reel"}, \
+        f"{nom} : schema altere"
 
     stats, trades = backtest.run(relus, bougies=bougies)
     resultats[nom] = (stats, trades)

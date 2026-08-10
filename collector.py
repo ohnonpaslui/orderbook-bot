@@ -44,6 +44,19 @@ GIT_PUSH    = os.environ.get("GIT_PUSH") == "1"
 BACKOFF_AFTER  = 10             # échecs consécutifs
 BACKOFF_SEC    = 300
 
+# Le flux est interroge a CHAQUE cycle, en meme temps que le carnet.
+#
+# Une premiere version l'interrogeait toutes les 6 s pour menager le bridage
+# ccxt. Erreur : la fenetre d'un snapshot couvre les 2 dernieres secondes, or
+# ces transactions-la n'avaient pas encore ete recuperees. Resultat mesure :
+# 4 snapshots sur 37 portaient des transactions au lieu de la quasi-totalite.
+#
+# Or c'est exactement la synchronisation entre carnet et flux qui permet de
+# dire si une vente agressive fait plier le carnet ou se fait absorber. La
+# desynchroniser vide la collecte de son objet. On paie donc le prix : deux
+# appels brides par cycle portent la cadence a ~2.5 s au lieu de 2 s.
+TRADES_INTERVAL = 0.0
+
 
 def path_for(venue, ts):
     """
@@ -111,12 +124,46 @@ class VenueCollector(threading.Thread):
         self.buffer = []
         self.lock   = threading.Lock()
         self.n_ok = self.n_err = self.streak = 0
+        # Flux des transactions. On l'interroge moins souvent que le carnet :
+        # la fenetre renvoyee couvre plusieurs minutes, donc rien n'est perdu,
+        # et le bridage ccxt ne permettrait pas deux appels par cycle sans
+        # doubler l'intervalle. Chaque transaction porte son horodatage : on
+        # les rattache ensuite au snapshot dont elles occupent la fenetre.
+        self.trades = {}            # id -> transaction, pour dedoublonner
+        self.dernier_trades = 0.0
+        self.trades_ok = False      # le flux repond-il ?
 
     def take_buffer(self):
         """Retire et retourne les lignes accumulées, sans bloquer la collecte."""
         with self.lock:
             rows, self.buffer = self.buffer, []
         return rows
+
+    def _rafraichir_trades(self, maintenant):
+        """Interroge le flux si l'echeance est passee, et dedoublonne."""
+        if maintenant - self.dernier_trades < TRADES_INTERVAL:
+            return
+        self.dernier_trades = maintenant
+        try:
+            for t in self.client.fetch_trades(self.cfg["symbol"], limit=500):
+                cle = t.get("id") or f"{t.get('timestamp')}_{t.get('amount')}"
+                self.trades[cle] = t
+            self.trades_ok = True
+        except Exception as e:
+            if self.trades_ok is not False:
+                print(f"[{self.venue}] flux transactions indisponible : "
+                      f"{type(e).__name__}", flush=True)
+            self.trades_ok = False
+        # On ne garde que le passe recent : la memoire ne doit pas croitre.
+        limite = (maintenant - 600) * 1000
+        self.trades = {k: v for k, v in self.trades.items()
+                       if (v.get("timestamp") or 0) >= limite}
+
+    def _trades_fenetre(self, fin):
+        """Transactions tombant dans la fenetre du snapshot courant."""
+        debut = (fin - self.cfg["interval"]) * 1000
+        return [t for t in self.trades.values()
+                if debut <= (t.get("timestamp") or 0) < fin * 1000]
 
     def run(self):
         while not self.stop.is_set():
@@ -128,9 +175,11 @@ class VenueCollector(threading.Thread):
                 book = (self.client.fetch_order_book(self.cfg["symbol"], limit=depth)
                         if depth else
                         self.client.fetch_order_book(self.cfg["symbol"]))
+                self._rafraichir_trades(t0)
                 # La bande de murs est passée explicitement : `features` ne doit
                 # dépendre d'aucun global, plusieurs threads l'appellent.
-                row = features.compute(book, t0, self.cfg["span_bps"])
+                row = features.compute(book, t0, self.cfg["span_bps"],
+                                       trades=self._trades_fenetre(t0))
                 if row:
                     with self.lock:
                         self.buffer.append(row)

@@ -63,7 +63,39 @@ def _find_wall(levels, mid, side, band_bps):
     return price, notional, dist_bps
 
 
-def compute(book, ts, wall_band_bps=None):
+def agreger_trades(trades, gros_notionnel=50_000.0):
+    """
+    Résume une salve de transactions : qui a frappé, et pour combien.
+
+    Sur un flux public, `side` désigne l'AGRESSEUR — celui qui est venu
+    prendre le prix affiché. C'est la seule information qui dise qui gagne le
+    bras de fer, et elle est absente du carnet : le carnet montre les
+    intentions, les transactions montrent les décisions.
+
+    Les grosses transactions sont comptées à part : un ordre de 200 000 $ ne
+    porte pas la même information qu'un de 500.
+    """
+    r = {"vol_achat": 0.0, "vol_vente": 0.0, "n_trades": 0,
+         "gros_achat": 0.0, "gros_vente": 0.0}
+    for t in trades or ():
+        qte = t.get("amount") or 0.0
+        prix = t.get("price") or 0.0
+        if qte <= 0 or prix <= 0:
+            continue
+        r["n_trades"] += 1
+        gros = (prix * qte) >= gros_notionnel
+        if t.get("side") == "sell":
+            r["vol_vente"] += qte
+            if gros:
+                r["gros_vente"] += qte
+        else:
+            r["vol_achat"] += qte
+            if gros:
+                r["gros_achat"] += qte
+    return r
+
+
+def compute(book, ts, wall_band_bps=None, trades=None):
     """
     book          : dict ccxt {"bids": [[px, amt], ...], "asks": [...]}
                     bids triés décroissant, asks triés croissant.
@@ -110,6 +142,12 @@ def compute(book, ts, wall_band_bps=None):
         # OBI dans [-1, +1] : +1 = que des acheteurs, -1 = que des vendeurs
         row[f"obi_{band}"] = round((b - a) / (b + a), 4) if (b + a) > 0 else 0.0
 
+    # Flux des transactions survenues depuis le snapshot précédent. Écrit à
+    # zéro quand il n'est pas collecté : les fichiers restent lisibles, et le
+    # marqueur de provenance dit ce qui est réel.
+    r_tr = agreger_trades(trades)
+    row.update(r_tr)
+
     for side, levels in (("bid", bids), ("ask", asks)):
         px, notional, dist = _find_wall(levels, mid, side, wall_band_bps)
         row[f"{side}_wall_px"]  = round(px, 2)
@@ -123,5 +161,12 @@ def compute(book, ts, wall_band_bps=None):
 COLUMNS = (
     ["ts", "best_bid", "best_ask", "mid", "microprice", "spread_bps"]
     + [f"{p}_{b}" for b in C.DEPTH_BANDS_BPS for p in ("bid", "ask", "obi")]
+    + ["vol_achat", "vol_vente", "n_trades", "gros_achat", "gros_vente"]
     + [f"{s}_wall_{f}" for s in ("bid", "ask") for f in ("px", "sz", "bps")]
 )
+
+# Colonnes ajoutees apres le debut de la collecte : les fichiers anterieurs
+# ne les contiennent pas. Les lecteurs les completent a zero plutot que
+# d'echouer, et l'analyse ecarte la periode ou elles manquent.
+COLONNES_FLUX = ["vol_achat", "vol_vente", "n_trades",
+                 "gros_achat", "gros_vente"]

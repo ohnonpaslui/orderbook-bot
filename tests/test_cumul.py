@@ -21,6 +21,7 @@ TMP = tempfile.mkdtemp(prefix="obcumul_")
 C.STATE_DIR = TMP
 C.use_venue(C.LIVE_VENUE)
 
+import features
 from diagnostics import Observateur
 
 CHEMIN = os.path.join(TMP, "diagnostics.json")
@@ -37,6 +38,8 @@ def ligne(ts, obi, mid=65000.0):
         r[f"obi_{b}"] = obi
     for c in ("bid", "ask"):
         r[f"{c}_wall_px"] = r[f"{c}_wall_sz"] = r[f"{c}_wall_bps"] = 0.0
+    for c in features.COLONNES_FLUX:
+        r[c] = 0.0
     return r
 
 

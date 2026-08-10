@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 
 import candles as K
 import config as C
+import features
 import paper_engine
 import technical as T
 from strategy import SetupBookStrategy
@@ -46,9 +47,18 @@ def load_rows(venue, date_from=None, date_to=None):
                     if rec.get("ts") in (None, "ts"):
                         continue
                     try:
-                        rows.append({k: float(v) for k, v in rec.items()})
+                        r = {k: float(v) for k, v in rec.items()}
                     except (TypeError, ValueError):
                         continue                      # ligne tronquée en fin de fichier
+                    # Les colonnes de flux ont été ajoutées après le début de
+                    # la collecte. On complète à zéro plutôt que d'échouer —
+                    # mais `flux_reel` distingue un zéro mesuré d'un zéro
+                    # faute de donnée, sans quoi on analyserait du vide en
+                    # croyant analyser un marché calme.
+                    r["flux_reel"] = 1.0 if "n_trades" in r else 0.0
+                    for c in features.COLONNES_FLUX:
+                        r.setdefault(c, 0.0)
+                    rows.append(r)
     rows.sort(key=lambda r: r["ts"])
     return rows
 
