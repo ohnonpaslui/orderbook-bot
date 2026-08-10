@@ -163,13 +163,17 @@ let livre = {bids:[], asks:[]};
    futures réglementés, pas la crypto. */
 const FLUX = {
   binance: {
+    // `@trade` et non `@aggTrade` : sur les perpetuels Binance, le flux
+    // agrege est muet — verifie en direct, 0 message contre 23 en 5 s pour
+    // `@trade`. Le champ `m` (isBuyerMaker) donne l'agresseur : vrai signifie
+    // que l'acheteur subissait, donc que le VENDEUR a frappe.
     url: s => `wss://fstream.binance.com/stream?streams=`
-            + `${s.toLowerCase()}@depth20@100ms/${s.toLowerCase()}@aggTrade`,
+            + `${s.toLowerCase()}@depth20@100ms/${s.toLowerCase()}@trade`,
     lire: m => {
       const d = m.data, f = m.stream || "";
       if (f.includes("depth")) return {type:"livre", bids:d.b, asks:d.a};
-      if (f.includes("aggTrade")) return {type:"trade", px:+d.p, qte:+d.q,
-                                          vente:d.m, t:d.T};
+      if (f.includes("@trade")) return {type:"trade", px:+d.p, qte:+d.q,
+                                        vente:d.m, t:d.T};
       return null;
     },
     souscrire: null,
