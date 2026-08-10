@@ -49,6 +49,13 @@ class Labo:
     def __init__(self, registre=REGISTRE):
         self.chemin = registre
         self.essais = self._charger()
+        # Ce qui compte pour la correction, ce sont les MESURES effectuées,
+        # pas les hypothèses déclarées. Un balayage de 22 candidats sur 4
+        # horizons fait 88 tests, pas un seul : la barre doit monter en
+        # conséquence. Constaté en production — un candidat à t = -3.15
+        # semblait passer le seuil de 2.00, alors que 88 mesures exigeaient
+        # 3.87. Il s'est effondré sur la réserve.
+        self.mesures = 0
 
     # ------------------------------------------------------------- registre
     def _charger(self):
@@ -88,7 +95,7 @@ class Labo:
         convaincant. Plancher à 2.0, plafond à 4.0 — au-delà on ne mesure
         plus rien de réaliste sur des échantillons de cette taille.
         """
-        n = max(1, len(self.essais) + extra)
+        n = max(1, len(self.essais) + getattr(self, "mesures", 0) + extra)
         # quantile normal approché pour alpha = 0.05 / n, test bilatéral
         alpha = 0.05 / n
         z = 2.0 if n == 1 else math.sqrt(2 * math.log(n / alpha))
@@ -108,8 +115,7 @@ class Labo:
         return donnees[:coupe], donnees[coupe:]
 
     # ------------------------------------------------------------ evaluation
-    @staticmethod
-    def evaluer(signal, rendements, horizon, nom="", prix=None,
+    def evaluer(self, signal, rendements, horizon, nom="", prix=None,
                 frais_bps=10.0, atr=None):
         """
         Évaluation standard d'un candidat, avec les trois garde-fous.
@@ -119,6 +125,7 @@ class Labo:
         le recouvrement — sans quoi la t-statistique est gonflée d'un facteur
         racine(horizon).
         """
+        self.mesures += 1
         paires = [(s, r) for i, (s, r) in enumerate(zip(signal, rendements))
                   if i % horizon == 0 and s is not None and r is not None]
         n = len(paires)
@@ -141,11 +148,18 @@ class Labo:
 
         # Décile extrême : c'est là qu'on traderait. Un IC qui ne s'y retrouve
         # pas n'est pas exploitable, quelle que soit sa significativité.
+        #
+        # Le SENS compte. Un IC négatif n'est pas une absence d'avantage : il
+        # dit qu'il faut trader à l'inverse du signal. On prend donc l'écart
+        # entre les deux déciles, orienté par le signe de l'IC, et divisé par
+        # deux puisqu'un trade n'exploite qu'un côté à la fois.
+        # (Une version antérieure prenait -bas pour un IC négatif, ce qui
+        # inversait le résultat et masquait un candidat valide.)
         tri = sorted(paires)
         k = max(1, n // 10)
         haut = statistics.fmean(p[1] for p in tri[-k:])
         bas = statistics.fmean(p[1] for p in tri[:k])
-        decile = haut if ic > 0 else -bas
+        decile = (haut - bas) / 2 * (1 if ic > 0 else -1)
 
         res = {"nom": nom, "n": n, "ic": ic, "t": t, "stable": stable,
                "parts": parts, "decile_atr": decile, "occasions": k}
@@ -165,7 +179,7 @@ class Labo:
         seuil = self.seuil_t()
         lignes = [
             f"  {r['nom']}  n={r['n']:,}  IC {r['ic']:+.4f}  t={r['t']:+.2f}"
-            f"  (seuil exige {seuil:.2f} apres {len(self.essais)} essais)",
+            f"  (seuil exige {seuil:.2f} apres {self.mesures} mesures)",
             f"    par quart : " + " ".join(f"{p:+.3f}" for p in r["parts"])
             + ("  stable" if r["stable"] else "  INSTABLE"),
         ]
@@ -180,7 +194,8 @@ class Labo:
         return "\n".join(lignes)
 
     def resume(self):
-        return (f"{len(self.essais)} hypotheses testees — "
+        return (f"{len(self.essais)} hypotheses declarees, "
+                f"{self.mesures} mesures effectuees — "
                 f"seuil de |t| exige : {self.seuil_t():.2f}")
 
 

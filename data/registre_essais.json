@@ -3,5 +3,10 @@
     "hypothese": "momentum de serie temporelle sur panier de futures (lookbacks 21,63,126,252, detention 21 seances)",
     "note": "famille documentee par Moskowitz-Ooi-Pedersen 2012",
     "date": "2026-08-10 12:18"
+  },
+  {
+    "hypothese": "signaux OHLCV a horizon de scalping sur NQ=F en 5m (horizons 1,2,3,6)",
+    "note": "zone non exploree : les analyses precedentes portaient sur 1-2 h",
+    "date": "2026-08-10 12:23"
   }
 ]

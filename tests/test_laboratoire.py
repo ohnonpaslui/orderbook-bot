@@ -63,6 +63,18 @@ res = labo.evaluer(s, r, HZ, nom="signal_faible", prix=PRIX, atr=ATR,
 print(labo.verdict(res))
 assert res["net"] < 0, "un signal faible doit etre negatif apres frais"
 
+print("\n=== 4bis. signal INVERSE : un IC negatif reste exploitable ===")
+# Un IC negatif ne veut pas dire « pas d'avantage » mais « trader a l'envers ».
+# Une version anterieure inversait le calcul et masquait un candidat valide.
+s, r = fabriquer(-0.45)
+res = labo.evaluer(s, r, HZ, nom="signal_inverse", prix=PRIX, atr=ATR)
+print(labo.verdict(res))
+assert res["ic"] < 0, "le signal de test doit bien etre negativement correle"
+assert res["decile_atr"] > 0, \
+    f"un IC negatif exploite a l'envers doit donner un gain positif, " \
+    f"obtenu {res['decile_atr']:+.3f}"
+assert res["net"] > 0, "ce signal est assez fort pour couvrir les frais"
+
 print("\n=== 5. le recouvrement est-il bien supprime ? ===")
 s, r = fabriquer(0.2)
 avec = labo.evaluer(s, r, 1, nom="horizon_1")
